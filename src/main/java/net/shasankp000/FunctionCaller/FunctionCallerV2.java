@@ -2146,25 +2146,13 @@ public class FunctionCallerV2 {
 
             case "goto":
             case "movetocoordinates":
-                // Verify goTo moved the bot close to the target
-                Integer targetX = (Integer) SharedStateUtils.getValue(sharedState, "found_block_x");
-                Integer targetZ = (Integer) SharedStateUtils.getValue(sharedState, "found_block_z");
-
-                if (targetX != null && targetZ != null && botSource != null && botSource.getPlayer() != null) {
-                    BlockPos botPos = botSource.getPlayer().blockPosition();
-                    double distance = Math.sqrt(Math.pow(botPos.getX() - (targetX + 1), 2) +
-                                               Math.pow(botPos.getZ() - targetZ, 2));
-
-                    if (distance <= 3.0) { // Within 3 blocks is good enough
-                        logger.info("✓ goTo verification: bot within {} blocks of target", String.format("%.1f", distance));
-                        return true;
-                    } else {
-                        logger.warn("✗ goTo verification failed: bot still {} blocks away from target", String.format("%.1f", distance));
-                        return false;
-                    }
-                }
-                // If no target in state, assume success (might be standalone goTo)
-                logger.info("✓ goTo verification: no target in SharedState, assuming success");
+                // goTo is asynchronous (PathTracer drives the bot to the target
+                // over multiple ticks). Checking distance right after the call
+                // falsely reports failure while the bot is mid-walk, which then
+                // aborts the whole plan as a "critical" failure. Accept the path
+                // request as success; arrival is the responsibility of the
+                // PathTracer (which already validates its own completion).
+                logger.info("✓ goTo verification: path accepted (asynchronous movement)");
                 return true;
 
             case "mineblock":
@@ -2343,7 +2331,7 @@ public class FunctionCallerV2 {
         if (actionName == null) return false;
 
         return switch (actionName.toLowerCase()) {
-            case "searchblocks", "goto", "navigateto" -> true;
+            case "searchblocks" -> true;
             default -> false;
         };
     }

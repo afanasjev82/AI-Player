@@ -161,6 +161,18 @@ public class HybridPlanner {
         long startTime = System.currentTimeMillis();
         LOGGER.info("Building hybrid plan for goal: {} (ID: {})", goalDescription, goalId);
 
+        // Step 0: Deterministic skill templates (Phase B). For goals with a real
+        // tool pipeline (gather/mine/explore/navigate/build) this produces a
+        // multi-step plan (searchBlocks → goTo → mineBlock) that the graph
+        // planner cannot express. Returns null for unsupported goals (craft,
+        // farm, combat, trade) so we fall through to graph search.
+        Plan skillPlan = SkillPlanBuilder.buildPlan(goalId, goalDescription, currentState);
+        if (skillPlan != null && !skillPlan.steps.isEmpty()) {
+            LOGGER.info("[skill] Using deterministic skill plan with {} step(s) for goal '{}'",
+                    skillPlan.steps.size(), goalDescription);
+            return skillPlan;
+        }
+
         // Step 1: Embed the goal
         float[] goalEmbedding = goalVector.embedGoal(goalDescription);
 
