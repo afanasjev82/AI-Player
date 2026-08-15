@@ -123,13 +123,13 @@ public class SkillPlanBuilder {
         return null;
     }
 
-    // ── build: place a single block near the bot (placeholder) ───────────────
+    // ── build: build a simple structure near the bot ─────────────────────────
 
     private static Plan buildStructurePlan(short goalId, String goalText, State state) {
+        String structure = inferStructure(goalText);
         String blockType = inferPlacementBlock(goalText);
         List<PlannedStep> steps = new ArrayList<>();
-        steps.add(step("placeBlock", String.format("%d,%d,%d,%s",
-                state.getBotX() + 1, state.getBotY() - 1, state.getBotZ(), blockType)));
+        steps.add(step("build", structure + "," + blockType));
         return toPlan(goalId, steps);
     }
 
@@ -142,17 +142,14 @@ public class SkillPlanBuilder {
         return toPlan(goalId, steps);
     }
 
-    // ── farm: till → plant → harvest (near the bot) ──────────────────────────
+    // ── farm: find dirt → till → plant (near the bot's live position) ────────
 
     private static Plan farmPlan(short goalId, String goalText, State state) {
         String seed = inferSeed(goalText);
         List<PlannedStep> steps = new ArrayList<>();
-        int x = state.getBotX() + 1;
-        int y = state.getBotY() - 1;
-        int z = state.getBotZ();
-        steps.add(step("farmTill", String.format("%d,%d,%d", x, y, z)));
-        steps.add(step("farmPlant", String.format("%d,%d,%d,%s", x, y, z, seed)));
-        steps.add(step("farmHarvest", String.format("%d,%d,%d", x, y, z)));
+        // The farm tool locates its own tillable block relative to the live bot
+        // position, so no explicit coordinates are needed.
+        steps.add(step("farm", seed));
         return toPlan(goalId, steps);
     }
 
@@ -245,5 +242,15 @@ public class SkillPlanBuilder {
         if (lower.contains("beet")) return "beetroot";
         // Default: wheat.
         return "wheat";
+    }
+
+    /** Map build goal text to a structure name. */
+    static String inferStructure(String goalText) {
+        String lower = goalText.toLowerCase();
+        if (lower.contains("wall") || lower.contains("fence")) return "wall";
+        if (lower.contains("room") || lower.contains("house") || lower.contains("living")) return "room";
+        if (lower.contains("shelter") || lower.contains("hut") || lower.contains("shack")) return "shelter";
+        // Default: shelter (smallest useful structure).
+        return "shelter";
     }
 }

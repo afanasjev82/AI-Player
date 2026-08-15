@@ -304,6 +304,37 @@ public class ToolRegistry {
                     (sharedState, paramMap, result) -> {
                         if (result instanceof String s) sharedState.put("farm.harvested", s);
                     }
+            ),
+
+            new Tool(
+                    "farm",
+                    """
+                    Farms near the bot: finds a nearby dirt/grass block, tills it with a hoe, and plants the given seed.
+                    Requires a hoe and the seed in the bot's inventory.
+                    """,
+                    List.of(
+                            new Tool.Parameter("seed", "Seed type: wheat, carrot, potato, or beetroot.")
+                    ),
+                    Set.of("farm.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("farm.result", s);
+                    }
+            ),
+
+            new Tool(
+                    "build",
+                    """
+                    Builds a simple structure near the bot from blocks in its inventory.
+                    Supported structures: wall, shelter, room.
+                    """,
+                    List.of(
+                            new Tool.Parameter("structure", "Structure to build: wall, shelter, or room."),
+                            new Tool.Parameter("blockType", "Building material (e.g., 'oak_planks', 'cobblestone').")
+                    ),
+                    Set.of("build.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("build.result", s);
+                    }
             )
     );
 

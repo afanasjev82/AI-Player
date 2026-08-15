@@ -1902,6 +1902,21 @@ public class FunctionCallerV2 {
                     getFunctionOutput(bot == null ? "Bot not found."
                             : FarmingTool.harvest(bot, new BlockPos(x, y, z)).join());
                 }
+                case "farm" -> {
+                    String seed = resolvePlaceholder(paramMap.get("seed"), state);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: farm with seed={}", seed);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : FarmingTool.farm(bot, seed).join());
+                }
+                case "build" -> {
+                    String structure = resolvePlaceholder(paramMap.get("structure"), state);
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: build structure={} blockType={}", structure, blockType);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : StructureBuilder.build(bot, structure, blockType).join());
+                }
                 default -> logger.warn("Unknown function: {}", functionName);
             }
 
@@ -2168,6 +2183,24 @@ public class FunctionCallerV2 {
                 }
                 if ("farmplant".equals(actionName) && paramArray.length >= 4) {
                     params.put("seed", paramArray[3]);
+                }
+                break;
+
+            case "farm":
+                if (paramArray.length >= 1) {
+                    params.put("seed", paramArray[0]);
+                } else {
+                    params.put("seed", "wheat");
+                }
+                break;
+
+            case "build":
+                if (paramArray.length >= 2) {
+                    params.put("structure", paramArray[0]);
+                    params.put("blockType", paramArray[1]);
+                } else if (paramArray.length >= 1) {
+                    params.put("structure", paramArray[0]);
+                    params.put("blockType", "minecraft:oak_planks");
                 }
                 break;
 

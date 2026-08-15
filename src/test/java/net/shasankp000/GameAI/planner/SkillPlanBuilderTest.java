@@ -99,13 +99,12 @@ class SkillPlanBuilderTest {
     }
 
     @Test
-    void farmProducesTillPlantHarvestChain() {
+    void farmProducesSingleFarmStep() {
         Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_FARM, "farm wheat", state);
         assertNotNull(plan);
-        assertEquals(3, plan.steps.size());
-        assertEquals("farmTill", plan.steps.get(0).actionName);
-        assertEquals("farmPlant", plan.steps.get(1).actionName);
-        assertEquals("farmHarvest", plan.steps.get(2).actionName);
+        assertEquals(1, plan.steps.size());
+        assertEquals("farm", plan.steps.get(0).actionName);
+        assertTrue(plan.steps.get(0).params.contains("wheat"));
     }
 
     @Test

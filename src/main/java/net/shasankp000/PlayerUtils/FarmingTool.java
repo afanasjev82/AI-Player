@@ -4,14 +4,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
-import net.minecraft.world.level.block.FarmlandBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -23,45 +22,62 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Farming tool (Phase C): till soil, plant seeds, and harvest mature crops.
+ * Farming tool (Phase C): find a tillable spot near the bot, till it, plant a
+ * seed, and (optionally) harvest a mature crop.
  *
- * <p>Uses the same server-side {@code useItemOn} path as {@link BlockPlacementTool}
- * so planting a seed or tilling dirt behaves exactly as vanilla. Harvesting
- * breaks a mature {@link CropBlock} via {@code gameMode.destroyBlock}, which
- * yields drops into the bot's inventory.
+ * <p>All operations locate their target relative to the bot's <b>live</b>
+ * position (not a cached {@code State} snapshot), so the farm skill works even
+ * after the bot has moved.
  */
 public final class FarmingTool {
     private static final Logger LOGGER = LoggerFactory.getLogger("farming-tool");
 
     private FarmingTool() {}
 
-    /** Till the block at {@code pos} into farmland (must be dirt/grass). */
-    public static CompletableFuture<String> till(ServerPlayer bot, BlockPos pos) {
+    /**
+     * High-level farm action: find nearby dirt/grass, till it, and plant the
+     * seed. Returns a descriptive result string.
+     */
+    public static CompletableFuture<String> farm(ServerPlayer bot, String seedType) {
         return runOnServer(bot, () -> {
-            ItemStack hoe = findItem(bot, stack -> {
-                Item i = stack.getItem();
-                String id = i.toString();
-                return id.contains("_hoe") || id.contains("hoe");
-            });
-            if (hoe == null) {
-                return "❌ No hoe in inventory.";
-            }
-            return useOnBlock(bot, pos, hoe);
+            Item seed = resolveSeed(seedType);
+            if (seed == null) return "❌ Unknown seed type: " + seedType;
+
+            ItemStack seedStack = findItem(bot, s -> s.getItem() == seed);
+            if (seedStack == null) return "❌ No " + seed.getDescriptionId() + " in inventory.";
+
+            ItemStack hoe = findItem(bot, FarmingTool::isHoe);
+            if (hoe == null) return "❌ No hoe in inventory.";
+
+            BlockPos dirt = findTillable(bot);
+            if (dirt == null) return "❌ No dirt/grass within 6 blocks to farm.";
+
+            // Till.
+            String tillResult = useOn(bot, dirt, hoe);
+            if (!tillResult.startsWith("✅")) return tillResult;
+
+            // Plant on the newly-tilled farmland.
+            return useOn(bot, dirt, seedStack);
         });
     }
 
-    /** Plant a seed at {@code pos} (must be tilled farmland). */
+    /** Till a specific block (dirt/grass → farmland). */
+    public static CompletableFuture<String> till(ServerPlayer bot, BlockPos pos) {
+        return runOnServer(bot, () -> {
+            ItemStack hoe = findItem(bot, FarmingTool::isHoe);
+            if (hoe == null) return "❌ No hoe in inventory.";
+            return useOn(bot, pos, hoe);
+        });
+    }
+
+    /** Plant a seed at a specific (tilled) block. */
     public static CompletableFuture<String> plant(ServerPlayer bot, BlockPos pos, String seedType) {
         return runOnServer(bot, () -> {
             Item seed = resolveSeed(seedType);
-            if (seed == null) {
-                return "❌ Unknown seed type: " + seedType;
-            }
-            ItemStack seedStack = findItem(bot, stack -> stack.getItem() == seed);
-            if (seedStack == null) {
-                return "❌ No " + seed.getDescriptionId() + " in inventory.";
-            }
-            return useOnBlock(bot, pos, seedStack);
+            if (seed == null) return "❌ Unknown seed type: " + seedType;
+            ItemStack seedStack = findItem(bot, s -> s.getItem() == seed);
+            if (seedStack == null) return "❌ No " + seed.getDescriptionId() + " in inventory.";
+            return useOn(bot, pos, seedStack);
         });
     }
 
@@ -80,36 +96,75 @@ public final class FarmingTool {
         });
     }
 
-    /** Whether the block at {@code pos} is mature and harvestable. */
-    public static boolean isMatureCrop(Level level, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        return state.getBlock() instanceof CropBlock crop && crop.isMaxAge(state);
-    }
-
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private static String useOnBlock(ServerPlayer bot, BlockPos pos, ItemStack item) {
-        // Select the item in the hotbar if possible, else hold it directly.
-        int slot = findHotbarSlot(bot, item);
-        if (slot >= 0) {
-            bot.getInventory().setSelectedSlot(slot);
+    /** Find the nearest dirt/grass block within 6 blocks (horizontal). */
+    private static BlockPos findTillable(ServerPlayer bot) {
+        BlockPos feet = bot.blockPosition();
+        for (int r = 0; r <= 6; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        BlockPos p = feet.offset(dx, dy, dz);
+                        Block b = bot.level().getBlockState(p).getBlock();
+                        if (b == Blocks.DIRT || b == Blocks.GRASS_BLOCK) {
+                            return p;
+                        }
+                    }
+                }
+            }
         }
+        return null;
+    }
 
-        // Determine the face to interact with (top face by default).
-        Level world = bot.level();
-        BlockState targetState = world.getBlockState(pos);
-        Direction face = (targetState.isAir()) ? Direction.UP : Direction.UP;
-        BlockPos adjacent = pos;
+    /** Use {@code item} on the top face of {@code pos} via the vanilla path. */
+    private static String useOn(ServerPlayer bot, BlockPos pos, ItemStack item) {
+        ensureInHand(bot, item);
 
         LookController.faceBlock(bot, pos);
 
-        Vec3 hitVec = Vec3.atCenterOf(pos);
-        BlockHitResult hitResult = new BlockHitResult(hitVec, face, adjacent, false);
+        BlockHitResult hit = new BlockHitResult(
+                Vec3.atCenterOf(pos),
+                Direction.UP,
+                pos,
+                false
+        );
 
-        ItemStack handStack = bot.getItemInHand(InteractionHand.MAIN_HAND);
-        bot.gameMode.useItemOn(bot, world, handStack, InteractionHand.MAIN_HAND, hitResult);
-
+        ItemStack held = bot.getItemInHand(InteractionHand.MAIN_HAND);
+        bot.gameMode.useItemOn(bot, bot.level(), held, InteractionHand.MAIN_HAND, hit);
         return "✅ Used " + item.getItemName().getString() + " at " + pos + ".";
+    }
+
+    /** Move {@code item} into a hotbar slot and select it, so it is held. */
+    private static void ensureInHand(ServerPlayer bot, ItemStack item) {
+        var inv = bot.getInventory();
+        for (int i = 0; i < 9; i++) {
+            ItemStack slot = inv.getItem(i);
+            if (!slot.isEmpty() && slot.getItem() == item.getItem()) {
+                inv.setSelectedSlot(i);
+                return;
+            }
+        }
+        for (int src = 9; src < inv.getContainerSize(); src++) {
+            ItemStack stack = inv.getItem(src);
+            if (!stack.isEmpty() && stack.getItem() == item.getItem()) {
+                int empty = -1;
+                for (int h = 0; h < 9; h++) {
+                    if (inv.getItem(h).isEmpty()) { empty = h; break; }
+                }
+                if (empty >= 0) {
+                    inv.setItem(empty, stack);
+                    inv.setItem(src, ItemStack.EMPTY);
+                    inv.setSelectedSlot(empty);
+                    return;
+                }
+            }
+        }
+    }
+
+    private static boolean isHoe(ItemStack stack) {
+        String id = stack.getItem().toString();
+        return id.endsWith("_hoe");
     }
 
     private static Item resolveSeed(String seedType) {
@@ -130,14 +185,6 @@ public final class FarmingTool {
             if (!stack.isEmpty() && pred.test(stack)) return stack;
         }
         return null;
-    }
-
-    private static int findHotbarSlot(ServerPlayer bot, ItemStack item) {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = bot.getInventory().getItem(i);
-            if (!stack.isEmpty() && stack.getItem() == item.getItem()) return i;
-        }
-        return -1;
     }
 
     private static CompletableFuture<String> runOnServer(ServerPlayer bot, java.util.concurrent.Callable<String> task) {
