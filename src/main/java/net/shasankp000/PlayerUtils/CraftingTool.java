@@ -8,7 +8,6 @@ import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -22,14 +21,24 @@ import java.util.concurrent.CompletableFuture;
  * than the full recipe system, because Minecraft 26.2's {@code SlotDisplay} /
  * {@code ContextMap} display API is not stable to drive directly.
  *
- * <p>Resolution: friendly name → item key → catalog recipe → consume inputs →
- * produce output. All inventory mutations run on the server thread.
+ * <p><b>Dependency chaining:</b> when the bot lacks a direct ingredient, it
+ * recursively crafts that ingredient first (e.g. "craft a crafting table" from
+ * raw logs → craft planks from logs → craft the table from planks). Raw
+ * materials ({@code oak_log}, {@code cobblestone}, {@code coal}) must already
+ * be in the inventory (the bot gathers those via the gather/mine skill).
+ *
+ * <p>Resolution: friendly name → item key → catalog recipe → ensure ingredients
+ * (recursively) → consume inputs → produce output. All inventory mutations run
+ * on the server thread.
  */
 public final class CraftingTool {
     private static final Logger LOGGER = LoggerFactory.getLogger("crafting-tool");
 
-    /** One craft recipe: output item + the items consumed to make one. */
-    private record Recipe(String output, String[] ingredients) {}
+    /** Maximum recursion depth for dependency chaining (guards against cycles). */
+    private static final int MAX_CRAFT_DEPTH = 8;
+
+    /** One craft recipe: output item, output count per craft, and the ingredients consumed. */
+    private record Recipe(String output, int outputCount, String[] ingredients) {}
 
     /** Friendly-name aliases → item registry key. */
     private static final Map<String, String> ALIASES = Map.ofEntries(
@@ -55,30 +64,33 @@ public final class CraftingTool {
     );
 
     /**
-     * Catalog of recipes. Ingredient keys are item registry keys; each is
-     * consumed once per craft. Output keys are the canonical registry key.
+     * Catalog of recipes. Ingredient keys are item registry keys; each entry is
+     * consumed once per craft (an ingredient listed N times means N are needed
+     * per craft). Output counts mirror vanilla where sensible (1 log → 4 planks,
+     * 2 planks → 4 sticks, coal+stick → 4 torches).
      */
     private static final Map<String, Recipe> RECIPES = Map.ofEntries(
-        Map.entry("minecraft:oak_planks", new Recipe("minecraft:oak_planks", new String[]{"minecraft:oak_log"})),
-        Map.entry("minecraft:stick", new Recipe("minecraft:stick", new String[]{"minecraft:oak_planks", "minecraft:oak_planks"})),
-        Map.entry("minecraft:crafting_table", new Recipe("minecraft:crafting_table", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks"})),
-        Map.entry("minecraft:torch", new Recipe("minecraft:torch", new String[]{"minecraft:coal", "minecraft:stick"})),
-        Map.entry("minecraft:wooden_pickaxe", new Recipe("minecraft:wooden_pickaxe", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:wooden_axe", new Recipe("minecraft:wooden_axe", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:wooden_sword", new Recipe("minecraft:wooden_sword", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick"})),
-        Map.entry("minecraft:wooden_shovel", new Recipe("minecraft:wooden_shovel", new String[]{"minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:wooden_hoe", new Recipe("minecraft:wooden_hoe", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:stone_pickaxe", new Recipe("minecraft:stone_pickaxe", new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:stone_axe", new Recipe("minecraft:stone_axe", new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick", "minecraft:stick"})),
-        Map.entry("minecraft:stone_sword", new Recipe("minecraft:stone_sword", new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick"})),
-        Map.entry("minecraft:furnace", new Recipe("minecraft:furnace", new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone"})),
-        Map.entry("minecraft:chest", new Recipe("minecraft:chest", new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks"}))
+        Map.entry("minecraft:oak_planks", new Recipe("minecraft:oak_planks", 4, new String[]{"minecraft:oak_log"})),
+        Map.entry("minecraft:stick", new Recipe("minecraft:stick", 4, new String[]{"minecraft:oak_planks", "minecraft:oak_planks"})),
+        Map.entry("minecraft:crafting_table", new Recipe("minecraft:crafting_table", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks"})),
+        Map.entry("minecraft:torch", new Recipe("minecraft:torch", 4, new String[]{"minecraft:coal", "minecraft:stick"})),
+        Map.entry("minecraft:wooden_pickaxe", new Recipe("minecraft:wooden_pickaxe", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:wooden_axe", new Recipe("minecraft:wooden_axe", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:wooden_sword", new Recipe("minecraft:wooden_sword", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick"})),
+        Map.entry("minecraft:wooden_shovel", new Recipe("minecraft:wooden_shovel", 1, new String[]{"minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:wooden_hoe", new Recipe("minecraft:wooden_hoe", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:stone_pickaxe", new Recipe("minecraft:stone_pickaxe", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:stone_axe", new Recipe("minecraft:stone_axe", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick", "minecraft:stick"})),
+        Map.entry("minecraft:stone_sword", new Recipe("minecraft:stone_sword", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick"})),
+        Map.entry("minecraft:furnace", new Recipe("minecraft:furnace", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone"})),
+        Map.entry("minecraft:chest", new Recipe("minecraft:chest", 1, new String[]{"minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks", "minecraft:oak_planks"}))
     );
 
     private CraftingTool() {}
 
     /**
-     * Craft {@code count} of the item described by {@code itemDescription}.
+     * Craft {@code count} of the item described by {@code itemDescription},
+     * automatically crafting any missing intermediate ingredients first.
      *
      * @return a CompletableFuture resolving to a human-readable result message.
      */
@@ -95,13 +107,12 @@ public final class CraftingTool {
                 }
 
                 String key = keyOf(target);
-                Recipe recipe = RECIPES.get(key);
-                if (recipe == null) {
+                if (!RECIPES.containsKey(key)) {
                     return "❌ No recipe available for " + itemDescription
                             + " (supported: planks, sticks, torches, crafting table, wooden/stone tools, furnace, chest).";
                 }
 
-                return callOnServer(bot, () -> performCraft(bot, target, recipe, Math.max(1, count)));
+                return callOnServer(bot, () -> craftRecursive(bot, target, Math.max(1, count), 0));
             } catch (Exception e) {
                 LOGGER.error("Craft failed for '{}': {}", itemDescription, e.getMessage(), e);
                 return "❌ Craft failed: " + e.getMessage();
@@ -109,30 +120,77 @@ public final class CraftingTool {
         });
     }
 
-    private static String performCraft(ServerPlayer bot, Item target, Recipe recipe, int count) {
-        // Consume the inputs (each recipe makes ONE output; loop for count).
-        for (int round = 0; round < count; round++) {
-            for (String ingredientKey : recipe.ingredients()) {
-                Item ingredient = itemByKey(ingredientKey);
-                if (ingredient == null) {
-                    return "❌ Unknown ingredient: " + ingredientKey;
-                }
-                if (!consumeOne(bot, ingredient)) {
-                    return "❌ Missing ingredient: " + ingredientKey
-                            + " (need " + recipe.ingredients().length + " items per craft).";
+    /**
+     * Recursively ensure {@code count} of {@code target} exists, crafting
+     * intermediate ingredients when missing. Returns "OK" when enough already
+     * exist, or a "✅ …" / "❌ …" message.
+     */
+    private static String craftRecursive(ServerPlayer bot, Item target, int count, int depth) {
+        if (depth > MAX_CRAFT_DEPTH) {
+            return "❌ Crafting depth exceeded (possible recipe cycle).";
+        }
+
+        String key = keyOf(target);
+        Recipe recipe = RECIPES.get(key);
+
+        if (recipe == null) {
+            // No recipe — this is a raw material. It must already be present.
+            if (countOf(bot, target) >= count) {
+                return "OK";
+            }
+            return "❌ Missing raw material: " + key
+                    + " (need " + count + ", have " + countOf(bot, target) + ").";
+        }
+
+        // Ensure each ingredient is present in sufficient quantity, crafting
+        // it recursively if possible.
+        for (String ingredientKey : distinct(recipe.ingredients())) {
+            Item ingredient = itemByKey(ingredientKey);
+            if (ingredient == null) {
+                return "❌ Unknown ingredient: " + ingredientKey;
+            }
+            int needed = occurrences(recipe.ingredients(), ingredientKey) * count;
+            int have = countOf(bot, ingredient);
+            if (have < needed) {
+                int deficit = needed - have;
+                // Craft the deficit of the intermediate ingredient.
+                String sub = craftRecursive(bot, ingredient, deficit, depth + 1);
+                if (!sub.equals("OK") && !sub.startsWith("✅")) {
+                    return sub; // propagate the missing-material failure
                 }
             }
         }
 
-        ItemStack result = new ItemStack(target, count);
+        // Consume ingredients and produce output.
+        for (int round = 0; round < count; round++) {
+            for (String ingredientKey : recipe.ingredients()) {
+                Item ingredient = itemByKey(ingredientKey);
+                if (ingredient == null || !consumeOne(bot, ingredient)) {
+                    return "❌ Missing ingredient (post-check): " + ingredientKey;
+                }
+            }
+        }
+
+        int produced = recipe.outputCount() * count;
+        ItemStack result = new ItemStack(target, produced);
         boolean added = bot.getInventory().add(result);
         bot.getInventory().setChanged();
         bot.containerMenu.broadcastChanges();
 
         if (added) {
-            return "✅ Crafted " + count + "× " + target.getDescriptionId() + ".";
+            return "✅ Crafted " + produced + "× " + target.getDescriptionId() + ".";
         }
         return "❌ Could not add crafted item to inventory (full?).";
+    }
+
+    /** Total stack count of {@code item} across the bot's inventory. */
+    private static int countOf(ServerPlayer bot, Item item) {
+        int total = 0;
+        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
+            ItemStack stack = bot.getInventory().getItem(i);
+            if (!stack.isEmpty() && stack.getItem() == item) total += stack.getCount();
+        }
+        return total;
     }
 
     /** Consume one item of {@code item} from the bot's inventory (any slot). */
@@ -146,6 +204,16 @@ public final class CraftingTool {
             }
         }
         return false;
+    }
+
+    private static int occurrences(String[] arr, String key) {
+        int n = 0;
+        for (String s : arr) if (key.equals(s)) n++;
+        return n;
+    }
+
+    private static String[] distinct(String[] arr) {
+        return java.util.Arrays.stream(arr).distinct().toArray(String[]::new);
     }
 
     private static Item resolveItem(String description) {
