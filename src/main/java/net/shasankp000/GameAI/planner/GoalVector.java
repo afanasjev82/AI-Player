@@ -74,6 +74,18 @@ public class GoalVector {
             embedding[15] = 0.6f;
         }
 
+        // Crafting keywords
+        if (normalized.contains("craft") || normalized.contains("make") || normalized.contains("assemble")) {
+            embedding[16] = 1.0f;
+            embedding[17] = 0.8f;
+        }
+
+        // Farming keywords
+        if (normalized.contains("farm") || normalized.contains("harvest") || normalized.contains("plant") || normalized.contains("grow")) {
+            embedding[18] = 1.0f;
+            embedding[19] = 0.8f;
+        }
+
         // Remaining dimensions are left as 0.0. This keeps embeddings
         // deterministic so cosine similarity is meaningful: random noise in the
         // bulk of the vector would drown out the keyword signal and make the

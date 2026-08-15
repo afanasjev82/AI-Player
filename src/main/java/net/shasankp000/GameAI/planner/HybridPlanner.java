@@ -95,11 +95,15 @@ public class HybridPlanner {
             return;
         }
 
-        // 2. Build planner components
-        // FIX: GoalVector must be created first; ActionGraph constructor requires GoalVector
-        //      (no static ActionGraph.buildDefault() exists)
+        // 2. Build planner components.
+        // The action graph must be populated from the ActionRegistry, otherwise
+        // it has zero nodes and every goal fails with "no valid start/goal nodes".
+        // (This is the autonomous path; the /bot plan path initialises via
+        // FunctionCallerV2.initializePlanner, which does call buildFromRegistry.)
         GoalVector goalVector             = new GoalVector();
         ActionGraph actionGraph           = new ActionGraph(goalVector);
+        ActionRegistry.ensureInitialized();
+        actionGraph.buildFromRegistry();
         MarkovChain2 markovChain          = new MarkovChain2();
         // FIX: getRLAgent() takes no arguments
         RLAgent rlAgent                   = BotEventHandler.getRLAgent();

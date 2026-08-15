@@ -129,24 +129,18 @@ public class ActionGraph {
 
     /**
      * Infers preconditions for an action based on its name.
+     *
+     * <p>Returns an empty set for every action. The old keyword-derived
+     * preconditions ({@code path_exists}, {@code tool_equipped},
+     * {@code block_detected}, …) used a vocabulary that never matches the state
+     * conditions produced by {@code HybridPlanner.extractStateConditions}
+     * ({@code has_item:*}, {@code health:*}, {@code has_equipment}). As a result
+     * {@code findStartNodes} filtered out every real action (mineBlock, goTo,
+     * placeBlock) and plans collapsed to trivial "look"/"turn" steps. Action
+     * reachability is instead governed by edge weights and the A* heuristic.
      */
     private Set<String> inferPreconditions(String actionName) {
-        Set<String> preconditions = new HashSet<>();
-        String lower = actionName.toLowerCase();
-
-        if (lower.contains("mine")) {
-            preconditions.add("block_detected");
-            preconditions.add("tool_equipped");
-        } else if (lower.contains("place")) {
-            preconditions.add("block_in_inventory");
-            preconditions.add("position_valid");
-        } else if (lower.contains("goto") || lower.contains("navigate")) {
-            preconditions.add("path_exists");
-        } else if (lower.contains("craft")) {
-            preconditions.add("materials_available");
-        }
-
-        return preconditions;
+        return new HashSet<>();
     }
 
     /**

@@ -398,26 +398,119 @@ public class AutonomousGoalEngine {
 
     /**
      * Extracts a JSON array of strings from the LLM response.
-     * Tolerates leading/trailing prose around the JSON array.
+     *
+     * <p>The local model (qwen3) frequently returns long reasoning prose that
+     * happens to contain square brackets, which made the old
+     * {@code indexOf('[') / lastIndexOf(']')} approach over-capture and produce
+     * malformed JSON. This implementation:
+     * <ol>
+     *   <li>Locates the first {@code '['} and its <em>matching</em> {@code ']'}
+     *       via a balanced-bracket scan (no over-capture).</li>
+     *   <li>Parses that substring strictly, then leniently as a fallback.</li>
+     *   <li>If no well-formed array is found, extracts bare quoted strings
+     *       (e.g. {@code "gather 32 wood"}) as a last resort.</li>
+     * </ol>
      */
     static List<String> parseGoalArray(String response) {
-        try {
-            // Find first '[' and last ']'
-            int start = response.indexOf('[');
-            int end   = response.lastIndexOf(']');
-            if (start == -1 || end == -1 || end <= start) return List.of();
+        if (response == null || response.isBlank()) return List.of();
 
-            String json = response.substring(start, end + 1);
-            JsonArray arr = JsonParser.parseString(json).getAsJsonArray();
+        // 1. Balanced-bracket extraction: first '[' to its matching ']'.
+        int start = response.indexOf('[');
+        if (start >= 0) {
+            int end = findMatchingBracket(response, start);
+            if (end > start) {
+                String json = response.substring(start, end + 1);
+
+                // 2a. Strict parse first.
+                List<String> strict = tryParseArray(json, false);
+                if (strict != null && !strict.isEmpty()) {
+                    return strict;
+                }
+                // 2b. Lenient fallback (handles minor formatting deviations).
+                List<String> lenient = tryParseArray(json, true);
+                if (lenient != null && !lenient.isEmpty()) {
+                    LOGGER.info("[autonomous] Parsed goal array in lenient mode");
+                    return lenient;
+                }
+                LOGGER.warn("[autonomous] Found bracket pair but could not parse as JSON array: {}", json);
+            }
+        }
+
+        // 3. Last resort: extract bare quoted strings from the response.
+        List<String> extracted = extractQuotedStrings(response);
+        if (!extracted.isEmpty()) {
+            LOGGER.info("[autonomous] Extracted {} goals from prose (no JSON array)", extracted.size());
+            return extracted;
+        }
+
+        LOGGER.warn("[autonomous] JSON parse error — raw: {}", response);
+        return List.of();
+    }
+
+    /** Returns the index of the bracket matching the opening bracket at {@code openIdx}. */
+    private static int findMatchingBracket(String s, int openIdx) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = openIdx; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '[') {
+                depth++;
+            } else if (c == ']') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Attempts to parse {@code json} as a JSON array of strings; null on failure. */
+    private static List<String> tryParseArray(String json, boolean lenient) {
+        try {
+            JsonArray arr;
+            if (lenient) {
+                arr = com.google.gson.JsonParser.parseReader(
+                        new java.io.StringReader(json)).getAsJsonArray();
+            } else {
+                arr = JsonParser.parseString(json).getAsJsonArray();
+            }
             List<String> goals = new java.util.ArrayList<>();
             for (JsonElement el : arr) {
-                String goal = el.getAsString().trim();
-                if (!goal.isEmpty()) goals.add(goal);
+                if (el.isJsonPrimitive()) {
+                    String goal = el.getAsString().trim();
+                    if (!goal.isEmpty()) goals.add(goal);
+                }
             }
             return goals;
         } catch (Exception e) {
-            LOGGER.warn("[autonomous] JSON parse error: {} — raw: {}", e.getMessage(), response);
-            return List.of();
+            return null;
         }
+    }
+
+    /** Extracts double-quoted substrings from a raw prose response. */
+    private static List<String> extractQuotedStrings(String response) {
+        List<String> out = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"([^\"]+)\"")
+                .matcher(response);
+        while (m.find()) {
+            String s = m.group(1).trim();
+            if (!s.isEmpty() && s.length() < 200) {
+                out.add(s);
+            }
+        }
+        return out;
     }
 }
