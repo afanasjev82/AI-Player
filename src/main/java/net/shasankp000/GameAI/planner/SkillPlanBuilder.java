@@ -41,6 +41,19 @@ public class SkillPlanBuilder {
     private SkillPlanBuilder() {}
 
     /**
+     * Whether a goal id has any tool implementation at all. Used by
+     * {@link HybridPlanner} to avoid falling through to the graph planner for
+     * goals that can never actually execute (craft/farm/combat/trade).
+     */
+    public static boolean isSupportedGoal(short goalId) {
+        return goalId == GoalMapper.GOAL_GATHER
+                || goalId == GoalMapper.GOAL_MINE
+                || goalId == GoalMapper.GOAL_EXPLORE
+                || goalId == GoalMapper.GOAL_NAVIGATE
+                || goalId == GoalMapper.GOAL_BUILD;
+    }
+
+    /**
      * Build a deterministic plan for {@code goalId}, or {@code null} when no
      * skill template covers the goal (caller should fall back).
      */

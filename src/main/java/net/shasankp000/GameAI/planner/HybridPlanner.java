@@ -95,6 +95,11 @@ public class HybridPlanner {
             return;
         }
 
+        // 1b. Snapshot inventory before execution so we can measure the real
+        //     outcome (Phase C learning signal) for gather/mine goals.
+        int inventoryBefore = countInventoryItems(bot);
+        String skillKey = skillKeyForGoal(goalId, goalText);
+
         // 2. Build planner components.
         // The action graph must be populated from the ActionRegistry, otherwise
         // it has zero nodes and every goal fails with "no valid start/goal nodes".
@@ -120,8 +125,9 @@ public class HybridPlanner {
             if (plan == null || plan.steps.isEmpty()) {
                 LOGGER.warn("[HybridPlanner] No plan produced for goal '{}' -- logging fallback",
                         goalText);
-                // FIX: BotEventHandler.dispatchGoalFallback() does not exist;
-                //      log the situation and return — the caller (AutonomousGoalEngine) handles retries
+                // Record the attempt as failed so unsupported goals (craft/farm/
+                // combat/trade) aren't silently counted as successes.
+                recordOutcome(skillKey, bot, inventoryBefore, false);
                 LOGGER.info("[HybridPlanner] Fallback: goal='{}' could not be planned by HybridPlanner; " +
                         "AutonomousGoalEngine should retry or route via LLM.", goalText);
                 return;
@@ -140,14 +146,62 @@ public class HybridPlanner {
 
             if (!executed) {
                 LOGGER.warn("[HybridPlanner] Plan execution failed for goal '{}'", goalText);
+                recordOutcome(skillKey, bot, inventoryBefore, false);
                 return;
             }
 
             LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);
+            recordOutcome(skillKey, bot, inventoryBefore, true);
 
         } finally {
             planner.shutdown();
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase C: everyday-task outcome measurement
+    // -------------------------------------------------------------------------
+
+    /** Singleton skill-experience store (disk-backed, survives restarts). */
+    private static final SkillExperienceStore SKILL_STORE = new SkillExperienceStore();
+
+    /** Total non-empty stacks in the bot's inventory (proxy for gathered items). */
+    private static int countInventoryItems(ServerPlayer bot) {
+        int count = 0;
+        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
+            if (!bot.getInventory().getItem(i).isEmpty()) count++;
+        }
+        return count;
+    }
+
+    /** Skill key derived from goal id + text (e.g. "gather:minecraft:oak_log"). */
+    private static String skillKeyForGoal(short goalId, String goalText) {
+        String name = GoalMapper.getGoalName(goalId);
+        if (goalId == GoalMapper.GOAL_GATHER || goalId == GoalMapper.GOAL_MINE) {
+            return name + ":" + SkillPlanBuilder.inferBlockType(goalText);
+        }
+        return name;
+    }
+
+    /**
+     * Record the observed outcome of a goal attempt. For gather/mine the reward
+     * is the inventory delta (items gained); other goals record success/failure
+     * with a 1.0/-1.0 reward. This is the learning signal that {@code training}
+     * mode's combat Q-table never provided for everyday work.
+     */
+    private static void recordOutcome(String skillKey, ServerPlayer bot,
+                                      int inventoryBefore, boolean success) {
+        int inventoryAfter = countInventoryItems(bot);
+        double reward = (double) (inventoryAfter - inventoryBefore);
+
+        // Non-gather goals: reward is a simple success signal.
+        if (!skillKey.startsWith("gather") && !skillKey.startsWith("mine")) {
+            reward = success ? 1.0 : -1.0;
+        }
+
+        SKILL_STORE.recordOutcome(skillKey, success, reward);
+        LOGGER.info("[skill] outcome '{}': success={}, reward={} (inventory {}→{})",
+                skillKey, success, reward, inventoryBefore, inventoryAfter);
     }
 
     // -------------------------------------------------------------------------
@@ -171,6 +225,16 @@ public class HybridPlanner {
             LOGGER.info("[skill] Using deterministic skill plan with {} step(s) for goal '{}'",
                     skillPlan.steps.size(), goalDescription);
             return skillPlan;
+        }
+
+        // Unsupported goals (craft/farm/combat/trade) have no tool implementation.
+        // Do NOT fall through to the graph planner: it would emit a misleading
+        // 1-step "goTo" plan and the goal would be falsely recorded as a success.
+        // Return null so the caller treats it as unplanned (and, in Phase C,
+        // records it as a failed/unsupported skill).
+        if (!SkillPlanBuilder.isSupportedGoal(goalId)) {
+            LOGGER.warn("[skill] Goal '{}' (ID {}) has no tool support — not planned", goalDescription, goalId);
+            return null;
         }
 
         // Step 1: Embed the goal
