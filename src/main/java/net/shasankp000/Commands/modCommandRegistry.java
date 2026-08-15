@@ -1568,8 +1568,21 @@ public class modCommandRegistry {
      * inside a block (which suffocates it) or in mid-air.
      */
     private static @NotNull BlockPos findSafeSpawn(ServerLevel level, BlockPos origin) {
-        // Search expanding horizontal rings, scanning vertically around the
-        // origin's height first.
+        return findSafeSpawn(origin.getX(), origin.getY(), origin.getZ(),
+                feet -> isSafeSpawnPos(level, feet));
+    }
+
+    /**
+     * Pure ring-scan search (no Minecraft world access) so the selection logic
+     * is unit-testable. Given {@code origin} coordinates and a safety predicate,
+     * returns the nearest block that satisfies the predicate, preferring the
+     * origin's Y before scanning up/down, expanding outward in horizontal rings.
+     *
+     * @param isSafe predicate deciding whether a candidate {@code BlockPos} is a
+     *               valid spawn position
+     */
+    static @NotNull BlockPos findSafeSpawn(int originX, int originY, int originZ,
+                                           java.util.function.Predicate<BlockPos> isSafe) {
         int maxHorizontal = 16;
         int maxVertical = 12;
 
@@ -1579,17 +1592,17 @@ public class modCommandRegistry {
                     // Only consider blocks on the current ring boundary.
                     if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
 
-                    int x = origin.getX() + dx;
-                    int z = origin.getZ() + dz;
+                    int x = originX + dx;
+                    int z = originZ + dz;
 
                     // Prefer the origin height, then search upward and downward.
                     for (int dy = 0; dy <= maxVertical; dy++) {
-                        BlockPos feet = new BlockPos(x, origin.getY() + dy, z);
-                        if (isSafeSpawnPos(level, feet)) return feet;
+                        BlockPos feet = new BlockPos(x, originY + dy, z);
+                        if (isSafe.test(feet)) return feet;
 
                         if (dy != 0) {
-                            BlockPos feetDown = new BlockPos(x, origin.getY() - dy, z);
-                            if (isSafeSpawnPos(level, feetDown)) return feetDown;
+                            BlockPos feetDown = new BlockPos(x, originY - dy, z);
+                            if (isSafe.test(feetDown)) return feetDown;
                         }
                     }
                 }
@@ -1597,7 +1610,7 @@ public class modCommandRegistry {
         }
 
         // Absolute fallback: return origin (behavior preserved if nothing is found).
-        return origin;
+        return new BlockPos(originX, originY, originZ);
     }
 
     private static boolean isSafeSpawnPos(ServerLevel level, BlockPos feet) {

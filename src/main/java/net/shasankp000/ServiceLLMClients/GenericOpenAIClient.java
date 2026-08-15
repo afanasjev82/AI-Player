@@ -23,9 +23,17 @@ public class GenericOpenAIClient implements LLMClient {
     private final String modelName;
     private final String baseUrl;
     private final HttpClient client;
+    private final java.time.Duration requestTimeout;
     public static final Logger LOGGER = LoggerFactory.getLogger("GenericOpenAI-Client");
 
+    /** Default per-request timeout; caps how long a hung backend may block us. */
+    public static final java.time.Duration DEFAULT_REQUEST_TIMEOUT = java.time.Duration.ofSeconds(120);
+
     public GenericOpenAIClient(String apiKey, String modelName, String baseUrl) {
+        this(apiKey, modelName, baseUrl, DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    public GenericOpenAIClient(String apiKey, String modelName, String baseUrl, java.time.Duration requestTimeout) {
         this.apiKey = apiKey;
         this.modelName = modelName;
         // Ensure baseUrl ends with "/" but doesn't have double slashes
@@ -33,6 +41,7 @@ public class GenericOpenAIClient implements LLMClient {
             throw new IllegalArgumentException("Base URL cannot be null or empty");
         }
         this.baseUrl = normalizeBaseUrl(baseUrl);
+        this.requestTimeout = requestTimeout;
         // Bounded connect/request timeouts so a hung LLM backend can never
         // block a caller (and, transitively, the Minecraft server thread) forever.
         this.client = HttpClient.newBuilder()
@@ -82,7 +91,7 @@ public class GenericOpenAIClient implements LLMClient {
             }
 
             HttpRequest request = requestBuilder
-                    .timeout(java.time.Duration.ofSeconds(120))
+                    .timeout(requestTimeout)
                     .build();
 
             HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
