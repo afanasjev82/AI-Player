@@ -27,9 +27,12 @@ public class Plan {
 
     /**
      * Get total score (risk) of the plan.
+     * The hybrid planner stores its path score in {@link #score}; the Markov
+     * planner stores its risk in {@link #estimatedRisk}. Report whichever is
+     * populated so callers never see a spurious 0.0.
      */
     public double getTotalScore() {
-        return estimatedRisk;
+        return score > 0.0 ? score : estimatedRisk;
     }
 
     /**

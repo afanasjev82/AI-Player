@@ -74,10 +74,10 @@ public class GoalVector {
             embedding[15] = 0.6f;
         }
 
-        // Add some randomness to avoid exact duplicates
-        for (int i = 16; i < EMBEDDING_DIM; i++) {
-            embedding[i] = (float) (Math.random() * 0.1);
-        }
+        // Remaining dimensions are left as 0.0. This keeps embeddings
+        // deterministic so cosine similarity is meaningful: random noise in the
+        // bulk of the vector would drown out the keyword signal and make the
+        // "closest action to goal" selection effectively random.
 
         // Normalize the embedding
         float norm = 0.0f;

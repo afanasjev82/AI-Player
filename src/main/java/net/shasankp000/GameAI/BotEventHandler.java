@@ -745,9 +745,16 @@ public class BotEventHandler {
 
 
     public static State getCurrentState() {
-
-        return BotEventHandler.currentState;
-
+        // Lazily build the game State when the static field is null. In play
+        // mode the RL loop that populates `currentState` may never run, so
+        // callers (planner, FunctionCaller, etc.) would otherwise get a null
+        // State and NPE. This mirrors the previously applied bytecode patch.
+        State state = BotEventHandler.currentState;
+        if (state == null && BotEventHandler.bot != null) {
+            state = createInitialState(BotEventHandler.bot);
+            BotEventHandler.currentState = state;
+        }
+        return state;
     }
 
     public void detectAndReactPlayMode(RLAgent rlAgentHook, QTable qTable) {

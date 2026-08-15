@@ -423,6 +423,7 @@ public class HybridPlanner {
 
         Plan plan = new Plan(UUID.randomUUID(), goalId, steps);
         plan.score = result.score;
+        plan.estimatedRisk = result.score;
         return plan;
     }
 

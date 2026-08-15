@@ -181,7 +181,11 @@ public class LLMServiceHandler {
         }
         CommandSourceStack botSource = bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
 
-        server.execute(() -> {
+        // Run intent routing off the server thread. routeIntent performs
+        // synchronous LLM calls (NLPProcessor.getIntention → DecisionResolver), which
+        // must never block the Minecraft server thread or it trips the 60s watchdog
+        // and forcibly shuts the server down.
+        BOT_TASK_POOL.submit(() -> {
             Thread.currentThread().setName("LLM-Chat-Worker");
             try {
                 routeIntent(message, botSource, playerUUID, client);

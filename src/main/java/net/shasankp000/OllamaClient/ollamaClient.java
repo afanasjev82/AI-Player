@@ -117,7 +117,7 @@ public class ollamaClient {
         // A human is now talking to the bot — pause autonomous loop
         AutonomousManager.getInstance().setPlayerControlled(botName, true);
 
-        server.execute(() -> {
+        BOT_TASK_POOL.submit(() -> {
             try {
                 routeIntent(message, botSource, playerUUID);
             } catch (Exception e) {
@@ -149,7 +149,7 @@ public class ollamaClient {
         // Pause autonomous loop while the command message is handled
         AutonomousManager.getInstance().setPlayerControlled(botName, true);
 
-        server.execute(() -> {
+        BOT_TASK_POOL.submit(() -> {
             try {
                 routeIntent(message, botSource, Objects.requireNonNull(playerSource.getPlayer()).getUUID());
             } catch (Exception e) {

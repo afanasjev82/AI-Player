@@ -33,7 +33,11 @@ public class GenericOpenAIClient implements LLMClient {
             throw new IllegalArgumentException("Base URL cannot be null or empty");
         }
         this.baseUrl = normalizeBaseUrl(baseUrl);
-        this.client = HttpClient.newHttpClient();
+        // Bounded connect/request timeouts so a hung LLM backend can never
+        // block a caller (and, transitively, the Minecraft server thread) forever.
+        this.client = HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(30))
+                .build();
     }
 
     private static String normalizeBaseUrl(String baseUrl) {
@@ -77,7 +81,9 @@ public class GenericOpenAIClient implements LLMClient {
                 requestBuilder.header("Authorization", "Bearer " + apiKey);
             }
 
-            HttpRequest request = requestBuilder.build();
+            HttpRequest request = requestBuilder
+                    .timeout(java.time.Duration.ofSeconds(120))
+                    .build();
 
             HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
 

@@ -22,6 +22,7 @@ import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.shasankp000.ChatUtils.ChatUtils;
@@ -1548,9 +1549,65 @@ public class modCommandRegistry {
     private static @NotNull BlockPos getBlockPos(CommandContext<CommandSourceStack> context) {
         ServerPlayer player = context.getSource().getPlayer();
 
+        if (player == null) {
+            // No player context (e.g. console/RCON). Fall back to the world spawn
+            // point rather than (0,0,0), which is frequently inside terrain.
+            ServerLevel level = context.getSource().getLevel();
+            BlockPos worldSpawn = level.getRespawnData().pos();
+            return findSafeSpawn(level, worldSpawn);
+        }
 
-        assert player != null;
-        return new BlockPos((int) player.getX() + 5, (int) player.getY(), (int) player.getZ());
+        // Offset from the player so the bot doesn't spawn on top of them.
+        BlockPos near = new BlockPos((int) player.getX() + 5, (int) player.getY(), (int) player.getZ());
+        return findSafeSpawn(context.getSource().getLevel(), near);
+    }
+
+    /**
+     * Scans outward from {@code origin} for the nearest position where the feet
+     * and head are air and the block below is solid, so the bot never spawns
+     * inside a block (which suffocates it) or in mid-air.
+     */
+    private static @NotNull BlockPos findSafeSpawn(ServerLevel level, BlockPos origin) {
+        // Search expanding horizontal rings, scanning vertically around the
+        // origin's height first.
+        int maxHorizontal = 16;
+        int maxVertical = 12;
+
+        for (int r = 0; r <= maxHorizontal; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    // Only consider blocks on the current ring boundary.
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
+
+                    int x = origin.getX() + dx;
+                    int z = origin.getZ() + dz;
+
+                    // Prefer the origin height, then search upward and downward.
+                    for (int dy = 0; dy <= maxVertical; dy++) {
+                        BlockPos feet = new BlockPos(x, origin.getY() + dy, z);
+                        if (isSafeSpawnPos(level, feet)) return feet;
+
+                        if (dy != 0) {
+                            BlockPos feetDown = new BlockPos(x, origin.getY() - dy, z);
+                            if (isSafeSpawnPos(level, feetDown)) return feetDown;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Absolute fallback: return origin (behavior preserved if nothing is found).
+        return origin;
+    }
+
+    private static boolean isSafeSpawnPos(ServerLevel level, BlockPos feet) {
+        BlockState feetBlock = level.getBlockState(feet);
+        BlockState headBlock = level.getBlockState(feet.above());
+        BlockState groundBlock = level.getBlockState(feet.below());
+
+        return feetBlock.isAir()
+                && headBlock.isAir()
+                && !groundBlock.isAir();
     }
 
     /**
