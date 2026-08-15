@@ -86,10 +86,26 @@ class SkillPlanBuilderTest {
 
     @Test
     void unsupportedGoalsReturnNull() {
-        assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_CRAFT, "craft a pickaxe", state));
-        assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_FARM, "farm wheat", state));
         assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_COMBAT, "fight zombies", state));
         assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_TRADE, "trade with villagers", state));
+    }
+
+    @Test
+    void craftProducesCraftStep() {
+        Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_CRAFT, "craft a wooden pickaxe", state);
+        assertNotNull(plan);
+        assertEquals(1, plan.steps.size());
+        assertEquals("craft", plan.steps.get(0).actionName);
+    }
+
+    @Test
+    void farmProducesTillPlantHarvestChain() {
+        Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_FARM, "farm wheat", state);
+        assertNotNull(plan);
+        assertEquals(3, plan.steps.size());
+        assertEquals("farmTill", plan.steps.get(0).actionName);
+        assertEquals("farmPlant", plan.steps.get(1).actionName);
+        assertEquals("farmHarvest", plan.steps.get(2).actionName);
     }
 
     @Test

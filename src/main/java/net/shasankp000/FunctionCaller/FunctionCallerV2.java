@@ -1712,6 +1712,14 @@ public class FunctionCallerV2 {
         }
     }
 
+    private static int parseIntSafe(String value, int fallback) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
     private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap, Map<String, Object> state) {
         return CompletableFuture.runAsync(() -> {
             logger.info("🔧 callFunction: {} with params: {}", functionName, paramMap);
@@ -1854,6 +1862,45 @@ public class FunctionCallerV2 {
                     } else {
                         logger.error("Cannot execute searchBlocks: bot is null");
                     }
+                }
+                case "craft" -> {
+                    String item = resolvePlaceholder(paramMap.get("item"), state);
+                    int count = parseIntSafe(resolvePlaceholder(paramMap.get("count"), state), 1);
+                    logger.info("Calling method: craft with item={} count={}", item, count);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    if (bot == null) {
+                        getFunctionOutput("Bot not found.");
+                    } else {
+                        getFunctionOutput(CraftingTool.craft(bot, item, count).join());
+                    }
+                }
+                case "farmTill" -> {
+                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
+                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
+                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: farmTill at ({}, {}, {})", x, y, z);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : FarmingTool.till(bot, new BlockPos(x, y, z)).join());
+                }
+                case "farmPlant" -> {
+                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
+                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
+                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    String seed = resolvePlaceholder(paramMap.get("seed"), state);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: farmPlant {} at ({}, {}, {})", seed, x, y, z);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : FarmingTool.plant(bot, new BlockPos(x, y, z), seed).join());
+                }
+                case "farmHarvest" -> {
+                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
+                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
+                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: farmHarvest at ({}, {}, {})", x, y, z);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : FarmingTool.harvest(bot, new BlockPos(x, y, z)).join());
                 }
                 default -> logger.warn("Unknown function: {}", functionName);
             }
@@ -2098,6 +2145,29 @@ public class FunctionCallerV2 {
                     params.put("initialRadius", "10");
                     params.put("maxRadius", "100");
                     params.put("radiusIncrement", "20");
+                }
+                break;
+
+            case "craft":
+                if (paramArray.length >= 2) {
+                    params.put("item", paramArray[0]);
+                    params.put("count", paramArray[1]);
+                } else if (paramArray.length >= 1) {
+                    params.put("item", paramArray[0]);
+                    params.put("count", "1");
+                }
+                break;
+
+            case "farmtill":
+            case "farmplant":
+            case "farmharvest":
+                if (paramArray.length >= 3) {
+                    params.put("x", paramArray[0]);
+                    params.put("y", paramArray[1]);
+                    params.put("z", paramArray[2]);
+                }
+                if ("farmplant".equals(actionName) && paramArray.length >= 4) {
+                    params.put("seed", paramArray[3]);
                 }
                 break;
 

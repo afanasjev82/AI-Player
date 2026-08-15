@@ -238,6 +238,72 @@ public class ToolRegistry {
                             sharedState.put("foundBlock.type", paramMap.get("blockType"));
                         }
                     }
+            ),
+
+            new Tool(
+                    "craft",
+                    """
+                    Crafts an item from ingredients in the bot's inventory.
+                    Supports common early-game recipes: planks, sticks, torches, crafting table, wooden/stone tools, furnace, chest.
+                    The bot must already have the required ingredients.
+                    """,
+                    List.of(
+                            new Tool.Parameter("item", "Item to craft (e.g., 'crafting table', 'wooden pickaxe', 'torch')."),
+                            new Tool.Parameter("count", "How many to craft.")
+                    ),
+                    Set.of("craft.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("craft.result", s);
+                    }
+            ),
+
+            new Tool(
+                    "farmTill",
+                    """
+                    Tills the dirt/grass block at the given coordinates into farmland using a hoe from the bot's inventory.
+                    """,
+                    List.of(
+                            new Tool.Parameter("x", "X coordinate of the dirt block."),
+                            new Tool.Parameter("y", "Y coordinate of the dirt block."),
+                            new Tool.Parameter("z", "Z coordinate of the dirt block.")
+                    ),
+                    Set.of("farm.tilled"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("farm.tilled", s);
+                    }
+            ),
+
+            new Tool(
+                    "farmPlant",
+                    """
+                    Plants a seed or crop at the given coordinates. The target must be tilled farmland.
+                    """,
+                    List.of(
+                            new Tool.Parameter("x", "X coordinate of the farmland."),
+                            new Tool.Parameter("y", "Y coordinate of the farmland."),
+                            new Tool.Parameter("z", "Z coordinate of the farmland."),
+                            new Tool.Parameter("seed", "Seed type: wheat, carrot, potato, or beetroot.")
+                    ),
+                    Set.of("farm.planted"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("farm.planted", s);
+                    }
+            ),
+
+            new Tool(
+                    "farmHarvest",
+                    """
+                    Harvests a mature crop at the given coordinates, dropping the produce into the bot's inventory.
+                    """,
+                    List.of(
+                            new Tool.Parameter("x", "X coordinate of the crop."),
+                            new Tool.Parameter("y", "Y coordinate of the crop."),
+                            new Tool.Parameter("z", "Z coordinate of the crop.")
+                    ),
+                    Set.of("farm.harvested"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("farm.harvested", s);
+                    }
             )
     );
 

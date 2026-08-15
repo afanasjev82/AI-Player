@@ -50,7 +50,9 @@ public class SkillPlanBuilder {
                 || goalId == GoalMapper.GOAL_MINE
                 || goalId == GoalMapper.GOAL_EXPLORE
                 || goalId == GoalMapper.GOAL_NAVIGATE
-                || goalId == GoalMapper.GOAL_BUILD;
+                || goalId == GoalMapper.GOAL_BUILD
+                || goalId == GoalMapper.GOAL_CRAFT
+                || goalId == GoalMapper.GOAL_FARM;
     }
 
     /**
@@ -68,8 +70,12 @@ public class SkillPlanBuilder {
                 return navigatePlan(goalId, goalText, state);
             case GoalMapper.GOAL_BUILD:
                 return buildStructurePlan(goalId, goalText, state);
+            case GoalMapper.GOAL_CRAFT:
+                return craftPlan(goalId, goalText);
+            case GoalMapper.GOAL_FARM:
+                return farmPlan(goalId, goalText, state);
             default:
-                return null; // craft / farm / combat / trade: no tool support yet
+                return null; // combat / trade: no tool support yet
         }
     }
 
@@ -124,6 +130,29 @@ public class SkillPlanBuilder {
         List<PlannedStep> steps = new ArrayList<>();
         steps.add(step("placeBlock", String.format("%d,%d,%d,%s",
                 state.getBotX() + 1, state.getBotY() - 1, state.getBotZ(), blockType)));
+        return toPlan(goalId, steps);
+    }
+
+    // ── craft: craft the requested item from inventory ingredients ───────────
+
+    private static Plan craftPlan(short goalId, String goalText) {
+        String item = inferCraftItem(goalText);
+        List<PlannedStep> steps = new ArrayList<>();
+        steps.add(step("craft", item + ",1"));
+        return toPlan(goalId, steps);
+    }
+
+    // ── farm: till → plant → harvest (near the bot) ──────────────────────────
+
+    private static Plan farmPlan(short goalId, String goalText, State state) {
+        String seed = inferSeed(goalText);
+        List<PlannedStep> steps = new ArrayList<>();
+        int x = state.getBotX() + 1;
+        int y = state.getBotY() - 1;
+        int z = state.getBotZ();
+        steps.add(step("farmTill", String.format("%d,%d,%d", x, y, z)));
+        steps.add(step("farmPlant", String.format("%d,%d,%d,%s", x, y, z, seed)));
+        steps.add(step("farmHarvest", String.format("%d,%d,%d", x, y, z)));
         return toPlan(goalId, steps);
     }
 
@@ -185,5 +214,36 @@ public class SkillPlanBuilder {
             return "minecraft:glass";
         }
         return "minecraft:oak_planks";
+    }
+
+    /** Map craft goal text to a craftable item friendly-name. */
+    static String inferCraftItem(String goalText) {
+        String lower = goalText.toLowerCase();
+        if (lower.contains("crafting table") || lower.contains("workbench")) return "crafting table";
+        if (lower.contains("stick")) return "stick";
+        if (lower.contains("torch")) return "torch";
+        if (lower.contains("wooden pickaxe")) return "wooden pickaxe";
+        if (lower.contains("wooden axe")) return "wooden axe";
+        if (lower.contains("wooden sword")) return "wooden sword";
+        if (lower.contains("wooden shovel")) return "wooden shovel";
+        if (lower.contains("wooden hoe")) return "wooden hoe";
+        if (lower.contains("stone pickaxe")) return "stone pickaxe";
+        if (lower.contains("stone axe")) return "stone axe";
+        if (lower.contains("stone sword")) return "stone sword";
+        if (lower.contains("furnace")) return "furnace";
+        if (lower.contains("chest")) return "chest";
+        if (lower.contains("planks")) return "planks";
+        // Default: crafting table is the most useful first craft.
+        return "crafting table";
+    }
+
+    /** Map farm goal text to a seed type. */
+    static String inferSeed(String goalText) {
+        String lower = goalText.toLowerCase();
+        if (lower.contains("carrot")) return "carrot";
+        if (lower.contains("potato")) return "potato";
+        if (lower.contains("beet")) return "beetroot";
+        // Default: wheat.
+        return "wheat";
     }
 }
