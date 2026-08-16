@@ -35,18 +35,27 @@ public class MiningTool {
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
                     if (FoodConsumptionTool.isConsumptionInProgress(bot.getUUID())) return;
 
-                    BlockState currentState = bot.level().getBlockState(targetBlockPos);
-
-                    if (currentState.isAir()) {
-                        System.out.println("✅ Mining complete!");
-                        miningResult.complete("Mining complete!");
+                    MinecraftServer server = bot.getServer();
+                    if (server == null) {
+                        miningResult.complete("⚠️ Server not found");
                         miningExecutor.shutdownNow();
                         return;
                     }
 
-                    bot.swing(bot.getUsedItemHand());
-                    bot.gameMode.destroyBlock(targetBlockPos);
-                    System.out.println("⛏️ Mining...");
+                    server.execute(() -> {
+                        BlockState currentState = bot.level().getBlockState(targetBlockPos);
+
+                        if (currentState.isAir()) {
+                            System.out.println("✅ Mining complete!");
+                            miningResult.complete("Mining complete!");
+                            miningExecutor.shutdownNow();
+                            return;
+                        }
+
+                        bot.swing(bot.getUsedItemHand());
+                        bot.gameMode.destroyBlock(targetBlockPos);
+                        System.out.println("⛏️ Mining...");
+                    });
 
                 }, 0, ATTACK_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
