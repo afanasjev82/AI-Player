@@ -85,9 +85,19 @@ class SkillPlanBuilderTest {
     }
 
     @Test
-    void unsupportedGoalsReturnNull() {
-        assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_COMBAT, "fight zombies", state));
-        assertNull(SkillPlanBuilder.buildPlan(GoalMapper.GOAL_TRADE, "trade with villagers", state));
+    void combatAndTradeAreNowSupported() {
+        Plan combat = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_COMBAT, "fight zombies", state);
+        assertNotNull(combat);
+        assertEquals(1, combat.steps.size());
+        assertEquals("combat", combat.steps.get(0).actionName);
+
+        Plan trade = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_TRADE, "trade with villagers", state);
+        assertNotNull(trade);
+        assertEquals(1, trade.steps.size());
+        assertEquals("trade", trade.steps.get(0).actionName);
+
+        assertTrue(SkillPlanBuilder.isSupportedGoal(GoalMapper.GOAL_COMBAT));
+        assertTrue(SkillPlanBuilder.isSupportedGoal(GoalMapper.GOAL_TRADE));
     }
 
     @Test

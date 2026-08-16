@@ -48,6 +48,15 @@ public class AutonomousGoalEngine {
     /** Maximum number of queued goals at any time. */
     private static final int MAX_QUEUE_DEPTH = 10;
 
+    /**
+     * Minimum wall-clock gap between two executions of the <em>same</em> build
+     * goal. The LLM re-plan loop repeatedly emits "build a shelter" at random
+     * wander locations, which keeps colliding with terrain ("occupied by Stone")
+     * and recording spurious failures. Rate-limiting build goals to one attempt
+     * per this window breaks that redundant re-trigger loop.
+     */
+    private static final long BUILD_GOAL_COOLDOWN_MS = 60_000L;
+
     // -------------------------------------------------------------------------
     // State
     // -------------------------------------------------------------------------
@@ -57,6 +66,9 @@ public class AutonomousGoalEngine {
 
     /** True while a player is talking directly to the bot; autonomous loop yields. */
     private final AtomicBoolean playerControlled = new AtomicBoolean(false);
+
+    /** Monotonic wall-clock timestamp of the last executed build goal (ms). */
+    private volatile long lastBuildGoalExecutedAt = 0L;
 
     /** True once shutdown() has been called. */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
@@ -309,6 +321,20 @@ public class AutonomousGoalEngine {
         if (goalId == GoalMapper.GOAL_UNKNOWN) {
             LOGGER.warn("[autonomous] Could not map '{}' to a known goal — skipping", entry.goalText());
             return;
+        }
+
+        // Build-redundancy guard: the LLM re-plan loop repeatedly emits "build"
+        // goals at random wander locations, which keeps failing against terrain.
+        // Rate-limit build goals to one attempt per cooldown window.
+        if (goalId == GoalMapper.GOAL_BUILD) {
+            long now = System.currentTimeMillis();
+            long last = lastBuildGoalExecutedAt;
+            if (now - last < BUILD_GOAL_COOLDOWN_MS) {
+                LOGGER.info("[autonomous] Skipping redundant build goal '{}' — {}s cooldown remaining",
+                        entry.goalText(), (BUILD_GOAL_COOLDOWN_MS - (now - last)) / 1000);
+                return;
+            }
+            lastBuildGoalExecutedAt = now;
         }
 
         try {

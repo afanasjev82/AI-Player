@@ -335,6 +335,33 @@ public class ToolRegistry {
                     (sharedState, paramMap, result) -> {
                         if (result instanceof String s) sharedState.put("build.result", s);
                     }
+            ),
+
+            new Tool(
+                    "combat",
+                    """
+                    Attacks the nearest hostile mob within 8 blocks.
+                    Automatically equips the best melee weapon, faces the target, and swings.
+                    """,
+                    List.of(),
+                    Set.of("combat.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("combat.result", s);
+                    }
+            ),
+
+            new Tool(
+                    "trade",
+                    """
+                    Reports the bot's tradeable inventory by value tier, so it can advertise
+                    a fair counter-offer. The actual throw/confirm trade is completed by the
+                    player interacting with the bot.
+                    """,
+                    List.of(),
+                    Set.of("trade.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("trade.result", s);
+                    }
             )
     );
 

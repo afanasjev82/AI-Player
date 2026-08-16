@@ -52,7 +52,9 @@ public class SkillPlanBuilder {
                 || goalId == GoalMapper.GOAL_NAVIGATE
                 || goalId == GoalMapper.GOAL_BUILD
                 || goalId == GoalMapper.GOAL_CRAFT
-                || goalId == GoalMapper.GOAL_FARM;
+                || goalId == GoalMapper.GOAL_FARM
+                || goalId == GoalMapper.GOAL_COMBAT
+                || goalId == GoalMapper.GOAL_TRADE;
     }
 
     /**
@@ -74,8 +76,12 @@ public class SkillPlanBuilder {
                 return craftPlan(goalId, goalText);
             case GoalMapper.GOAL_FARM:
                 return farmPlan(goalId, goalText, state);
+            case GoalMapper.GOAL_COMBAT:
+                return combatPlan(goalId, goalText);
+            case GoalMapper.GOAL_TRADE:
+                return tradePlan(goalId, goalText);
             default:
-                return null; // combat / trade: no tool support yet
+                return null;
         }
     }
 
@@ -150,6 +156,27 @@ public class SkillPlanBuilder {
         // The farm tool locates its own tillable block relative to the live bot
         // position, so no explicit coordinates are needed.
         steps.add(step("farm", seed));
+        return toPlan(goalId, steps);
+    }
+
+    // ── combat: attack the nearest hostile mob ───────────────────────────────
+
+    private static Plan combatPlan(short goalId, String goalText) {
+        List<PlannedStep> steps = new ArrayList<>();
+        // The combat tool locates its own target (nearest Monster/Slime within
+        // 8 blocks), arms the best melee weapon, and attacks once.
+        steps.add(step("combat", ""));
+        return toPlan(goalId, steps);
+    }
+
+    // ── trade: report tradeable inventory (offer evaluation is player-driven) ─
+
+    private static Plan tradePlan(short goalId, String goalText) {
+        List<PlannedStep> steps = new ArrayList<>();
+        // Trade is player-interactive: the active side is advertising what the
+        // bot can trade. The full throw/confirm handshake is handled by
+        // TradeListener when a player actually offers an item.
+        steps.add(step("trade", ""));
         return toPlan(goalId, steps);
     }
 

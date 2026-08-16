@@ -1917,6 +1917,18 @@ public class FunctionCallerV2 {
                     getFunctionOutput(bot == null ? "Bot not found."
                             : StructureBuilder.build(bot, structure, blockType).join());
                 }
+                case "combat" -> {
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: combat");
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : CombatTool.combat(bot).join());
+                }
+                case "trade" -> {
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: trade (inventory report)");
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : TradeTool.inventory(bot).join());
+                }
                 default -> logger.warn("Unknown function: {}", functionName);
             }
 
@@ -2204,6 +2216,12 @@ public class FunctionCallerV2 {
                 }
                 break;
 
+            case "combat":
+            case "trade":
+                // No parameters: the tools locate their own target / report
+                // the bot's own inventory.
+                break;
+
             case "turn":
                 if (paramArray.length >= 1) {
                     params.put("direction", paramArray[0]);
@@ -2411,6 +2429,8 @@ public class FunctionCallerV2 {
             case "evade":
             case "retreat":
             case "shield":
+            case "combat":
+            case "trade":
             case "gethealthlevel":
             case "gethungerlevel":
             case "getoxygenlevel":
