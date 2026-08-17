@@ -338,6 +338,19 @@ public class ToolRegistry {
             ),
 
             new Tool(
+                    "collect",
+                    """
+                    Collects all nearby dropped items into the bot's inventory.
+                    Use after mining a block so the dropped resource is picked up.
+                    """,
+                    List.of(),
+                    Set.of("collect.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("collect.result", s);
+                    }
+            ),
+
+            new Tool(
                     "combat",
                     """
                     Attacks the nearest hostile mob within 8 blocks.

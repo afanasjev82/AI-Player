@@ -46,10 +46,11 @@ class SkillPlanBuilderTest {
     void gatherProducesSearchGoMineChain() {
         Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_GATHER, "gather 32 wood", state);
         assertNotNull(plan);
-        assertEquals(3, plan.steps.size());
+        assertEquals(4, plan.steps.size());
         assertEquals("searchBlocks", plan.steps.get(0).actionName);
         assertEquals("goTo", plan.steps.get(1).actionName);
         assertEquals("mineBlock", plan.steps.get(2).actionName);
+        assertEquals("collect", plan.steps.get(3).actionName);
     }
 
     @Test
@@ -64,8 +65,9 @@ class SkillPlanBuilderTest {
     void mineUsesSameChainAsGather() {
         Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_MINE, "mine 16 stone", state);
         assertNotNull(plan);
-        assertEquals(3, plan.steps.size());
+        assertEquals(4, plan.steps.size());
         assertEquals("mineBlock", plan.steps.get(2).actionName);
+        assertEquals("collect", plan.steps.get(3).actionName);
     }
 
     @Test

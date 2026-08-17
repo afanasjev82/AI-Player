@@ -42,6 +42,12 @@ public class CliffDetector {
                 AABB voxelBox = shape.bounds();
                 BlockPos voxelPos = new BlockPos((int) voxelBox.minX, (int) voxelBox.minY, (int) voxelBox.minZ);
 
+                // CRITICAL: only read block state for already-loaded chunks.
+                // This detector runs off the server thread (AutoFaceEntity's
+                // executor); an unguarded getBlockState() on an unloaded chunk
+                // triggers a chunk-load .join() that deadlocks the watchdog.
+                if (!world.isLoaded(voxelPos)) continue;
+
                 // Check if the block is solid
                 BlockState state = world.getBlockState(voxelPos);
                 if (state.isRedstoneConductor(world, voxelPos)) {

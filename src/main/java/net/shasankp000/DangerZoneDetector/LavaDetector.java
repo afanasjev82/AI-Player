@@ -61,8 +61,10 @@ public class LavaDetector {
                 source
         ));
 
-        // Check if the block hit is lava
-        if (blockHit != null && source.level().getBlockState(blockHit.getBlockPos()).is(Blocks.LAVA)) {
+        // Check if the block hit is lava — guarded for loaded chunks (this runs
+        // off the server thread; see detectNearestLavaWithBoundingBox).
+        if (blockHit != null && source.level().isLoaded(blockHit.getBlockPos())
+                && source.level().getBlockState(blockHit.getBlockPos()).is(Blocks.LAVA)) {
             return start.distanceTo(blockHit.getLocation());
         }
 
@@ -90,6 +92,13 @@ public class LavaDetector {
             for (int y = (int) boundingBox.minY; y <= (int) boundingBox.maxY; y++) {
                 for (int z = (int) boundingBox.minZ; z <= (int) boundingBox.maxZ; z++) {
                     mutable.set(x, y, z);
+
+                    // CRITICAL: only read block state for already-loaded chunks.
+                    // This detector runs off the server thread (AutoFaceEntity's
+                    // executor); an unguarded getBlockState() on an unloaded
+                    // chunk triggers ServerChunkCache.getChunk().join(), which
+                    // deadlocks and trips the 60s watchdog. Skip unloaded chunks.
+                    if (!world.isLoaded(mutable)) continue;
 
                     // Check if the block is a lava source or flowing lava
                     if (world.getBlockState(mutable).is(Blocks.LAVA)) {

@@ -90,6 +90,13 @@ public class BotEventHandler {
     private static long lastReflectionTime = System.currentTimeMillis();
     private static final long REFLECTION_INTERVAL_MS = TimeUnit.MINUTES.toMillis(5); // Reflect every 5 minutes
 
+    // Deterministic self-defense rate-limit. AutoFaceEntity re-invokes the
+    // combat handler every tick (33ms), so without a cooldown the fallback
+    // would spam an attack (and a log line) every tick. One attack per this
+    // interval is plenty for a reactive self-defense response.
+    private static volatile long lastCombatFallbackAt = 0L;
+    private static final long COMBAT_FALLBACK_COOLDOWN_MS = 1000L; // 1 second
+
 
 
     public BotEventHandler(MinecraftServer server, ServerPlayer bot) {
@@ -774,7 +781,9 @@ public class BotEventHandler {
 
 
             if (qTable == null) {
-                ChatUtils.sendChatMessages(botSource, "I have no training data to work with! Please spawn me in training mode so that I can learn first!");
+                // No Q-table at all: skip the (empty) RL path and fight back
+                // deterministically so the bot is never a passive target.
+                attackFallbackRateLimited(bot, "No Q-table");
             }
 
             else {
@@ -799,21 +808,24 @@ public class BotEventHandler {
                     // Gather state information
                     State currentState = createInitialState(bot);
 
-//                double riskAppetite = currentState.getRiskAppetite();
-//
                     Map<StateActions.Action, Double> riskMap = currentState.getRiskMap();
 
-
-
-                    // Choose action
+                    // Choose action via the trained policy.
                     StateActions.Action chosenAction = rlAgentHook.chooseActionPlayMode(currentState, qTable, riskMap, "detectAndReactPlayMode", transitionHistory);
 
-
-                    // Log chosen action for debugging
-                    System.out.println("Play Mode - Chosen action: " + chosenAction);
-
-                    // Execute action
-                    executeAction(chosenAction, botSource);
+                    // If the Q-table is empty the policy degenerates to STAY
+                    // ("No viable actions available. Defaulting to STAY"), which
+                    // makes the bot a passive target. Fall back to the
+                    // deterministic combat primitive so an untrained bot still
+                    // defends itself. A trained policy that picks a real action
+                    // (ATTACK / EVADE / SHOOT_ARROW / SPRINT…) is left untouched.
+                    if (qTable.getTable().isEmpty() || chosenAction == StateActions.Action.STAY) {
+                        attackFallbackRateLimited(bot, "Q-table empty or policy chose STAY");
+                    } else {
+                        // Log chosen action for debugging
+                        System.out.println("Play Mode - Chosen action: " + chosenAction);
+                        executeAction(chosenAction, botSource);
+                    }
                 }
                 else if (DangerZoneDetector.detectDangerZone(bot, 10, 10, 10) <= 5.0 && DangerZoneDetector.detectDangerZone(bot, 10, 10, 10) > 0.0) {
 
@@ -848,6 +860,32 @@ public class BotEventHandler {
                 isExecuting = false;
                 AutoFaceEntity.isHandlerTriggered = false; // Reset the trigger flag
             }
+        }
+    }
+
+    /**
+     * Rate-limited deterministic self-defense attack.
+     *
+     * <p>AutoFaceEntity re-invokes the combat handler every tick, so an
+     * unthrottled fallback would attack (and log) every ~33ms. This wrapper
+     * enforces a 1s cooldown between fallback attacks while keeping the
+     * "never passive" guarantee. It only logs when a real attack is performed;
+     * the "nothing within reach" case is silent to avoid re-spamming the log.
+     */
+    private static void attackFallbackRateLimited(ServerPlayer bot, String reason) {
+        long now = System.currentTimeMillis();
+        long last = lastCombatFallbackAt;
+        if (now - last < COMBAT_FALLBACK_COOLDOWN_MS) {
+            return; // within cooldown — skip silently
+        }
+        lastCombatFallbackAt = now;
+
+        String result = CombatTool.attackNearestHostileBlocking(bot, 8.0);
+        // Only log a real attack; "No hostile mobs within N blocks" means the
+        // detected hostile was beyond melee reach, which is not worth a log
+        // line every second.
+        if (result != null && result.startsWith("Attacked")) {
+            LOGGER.info("[combat] {} — {}", reason, result);
         }
     }
 

@@ -85,7 +85,7 @@ public class SkillPlanBuilder {
         }
     }
 
-    // ── gather / mine: searchBlocks → goTo → mineBlock ───────────────────────
+    // ── gather / mine: searchBlocks → goTo → mineBlock → collect ────────────
 
     private static Plan gatherPlan(short goalId, String goalText, State state) {
         String blockType = inferBlockType(goalText);
@@ -98,6 +98,8 @@ public class SkillPlanBuilder {
         steps.add(step("goTo", ""));
         // 3. Mine the found block (params resolved from SharedState).
         steps.add(step("mineBlock", ""));
+        // 4. Collect the dropped resource before moving on (fixes reward=0).
+        steps.add(step("collect", ""));
 
         return toPlan(goalId, steps);
     }

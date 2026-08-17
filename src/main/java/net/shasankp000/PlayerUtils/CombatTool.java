@@ -1,7 +1,6 @@
 package net.shasankp000.PlayerUtils;
 
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.cubemob.Slime;
@@ -40,33 +39,84 @@ public final class CombatTool {
      *         a failure reason when there is nothing to attack.
      */
     public static CompletableFuture<String> combat(ServerPlayer bot) {
-        return runOnServer(bot, () -> {
-            List<Entity> hostiles = findHostiles(bot, SEARCH_RADIUS);
-            if (hostiles.isEmpty()) {
-                return "No hostile mobs within " + (int) SEARCH_RADIUS + " blocks.";
+        return CompletableFuture.supplyAsync(() -> attackNearestHostileBlocking(bot, SEARCH_RADIUS));
+    }
+
+    /**
+     * Synchronous, <b>thread-safe</b> entry point: marshals the attack onto the
+     * Minecraft server thread and blocks the caller for the result.
+     *
+     * <p>This is the method {@code BotEventHandler}'s self-defense path calls.
+     * It is safe from <em>any</em> thread (the AutoFaceEntity executor, a
+     * ForkJoin worker, etc.) because world/entity mutation must happen on the
+     * server thread.
+     *
+     * @return a human-readable result, or {@code null} if nothing to attack.
+     */
+    public static String attackNearestHostileBlocking(ServerPlayer bot, double radius) {
+        try {
+            if (bot == null || !bot.isAlive() || bot.hasDisconnected()) {
+                return "Bot is unavailable.";
             }
+            var server = bot.createCommandSourceStack().getServer();
+            if (server.isSameThread()) {
+                return attackNearestHostile(bot, radius);
+            }
+            CompletableFuture<String> future = new CompletableFuture<>();
+            server.execute(() -> {
+                try {
+                    future.complete(attackNearestHostile(bot, radius));
+                } catch (Throwable t) {
+                    future.completeExceptionally(t);
+                }
+            });
+            return future.get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            LOGGER.error("Combat operation failed: {}", e.getMessage(), e);
+            return "Combat failed: " + e.getMessage();
+        }
+    }
 
-            // Prefer the nearest hostile (most immediate threat to hit).
-            Entity target = hostiles.stream()
-                    .min(Comparator.comparingDouble(e -> e.distanceToSqr(bot)))
-                    .orElse(null);
-            if (target == null) return "No hostile mobs within " + (int) SEARCH_RADIUS + " blocks.";
+    /**
+     * Synchronous core of {@link #combat(ServerPlayer)} — <b>MUST run on the
+     * server thread</b>. Prefer {@link #attackNearestHostileBlocking} unless you
+     * are already on the server thread.
+     *
+     * @return a human-readable result, or {@code null} if nothing to attack.
+     */
+    public static String attackNearestHostile(ServerPlayer bot, double radius) {
+        List<Entity> hostiles = findHostiles(bot, radius);
+        if (hostiles.isEmpty()) {
+            return "No hostile mobs within " + (int) radius + " blocks.";
+        }
 
-            double distance = Math.sqrt(target.distanceToSqr(bot));
+        // Prefer the nearest hostile (most immediate threat to hit).
+        Entity target = hostiles.stream()
+                .min(Comparator.comparingDouble(e -> e.distanceToSqr(bot)))
+                .orElse(null);
+        if (target == null) return "No hostile mobs within " + (int) radius + " blocks.";
 
-            // Arm with the best melee weapon we have (fists otherwise).
-            boolean armed = WeaponUtils.equipBestMeleeWeapon(bot);
+        double distance = Math.sqrt(target.distanceToSqr(bot));
 
-            // Face the nearest hostile before swinging so the hit lands.
-            FaceClosestEntity.faceClosestEntity(bot, hostiles);
+        // Arm with the best melee weapon we have (fists otherwise).
+        boolean armed = WeaponUtils.equipBestMeleeWeapon(bot);
 
-            bot.swing(InteractionHand.MAIN_HAND);
-            bot.attack(target);
+        // Face the nearest hostile before attacking so the hit lands.
+        FaceClosestEntity.faceClosestEntity(bot, hostiles);
 
-            return "Attacked " + target.getName().getString()
-                    + " at " + String.format("%.1f", distance) + "m"
-                    + (armed ? " (melee weapon equipped)." : " (no melee weapon — used fists).");
-        });
+        // Attack via the Carpet `/player <bot> attack` command, consistent with
+        // every other skill (mine/place/move all route through Carpet commands
+        // rather than calling `bot.attack()` directly). This preserves vanilla
+        // attack-cooldown and reach handling.
+        var source = bot.createCommandSourceStack()
+                .withSuppressedOutput()
+                .withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
+        bot.createCommandSourceStack().getServer().getCommands()
+                .performPrefixedCommand(source, "/player " + bot.getName().getString() + " attack");
+
+        return "Attacked " + target.getName().getString()
+                + " at " + String.format("%.1f", distance) + "m"
+                + (armed ? " (melee weapon equipped)." : " (no melee weapon — used fists).");
     }
 
     /** Count of nearby hostile mobs, for quick combat awareness. */

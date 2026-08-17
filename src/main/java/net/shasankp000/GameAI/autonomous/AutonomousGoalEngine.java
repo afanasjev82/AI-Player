@@ -9,11 +9,14 @@ import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.planner.GoalMapper;
 import net.shasankp000.GameAI.planner.HybridPlanner;
+import net.shasankp000.GameAI.planner.SkillExperienceStore;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import net.shasankp000.ServiceLLMClients.LLMServiceHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -69,6 +72,14 @@ public class AutonomousGoalEngine {
 
     /** Monotonic wall-clock timestamp of the last executed build goal (ms). */
     private volatile long lastBuildGoalExecutedAt = 0L;
+
+    /**
+     * Disk-backed everyday-task outcomes. The skill selector reads this to
+     * deprioritize goals whose skill keeps failing and favour proven ones —
+     * this is the "learn which skill to attempt next" layer, as opposed to
+     * re-learning how to perform a skill (which stays deterministic).
+     */
+    private final SkillExperienceStore skillStore = new SkillExperienceStore();
 
     /** True once shutdown() has been called. */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
@@ -224,7 +235,11 @@ public class AutonomousGoalEngine {
                     "generate a prioritised list of 4-6 short, achievable goals for the bot to " +
                     "complete right now. Reply with ONLY a valid JSON array of strings. " +
                     "Each string must be a single concise goal in plain English. " +
-                    "Example: [\"gather 32 wood\", \"craft a crafting table\", \"mine 16 stone\"]";
+                    "Example: [\"gather 32 wood\", \"craft a crafting table\", \"mine 16 stone\"]\n" +
+                    "IMPORTANT: if the bot's game mode is 'creative', it already has unlimited " +
+                    "resources, so do NOT generate gather/mine/craft goals (there is nothing to " +
+                    "collect or craft). Focus instead on building, exploring, and using blocks " +
+                    "already available in the creative inventory.";
 
             String userPrompt = "Bot state:\n" + stateSnapshot +
                     "\n\nGenerate the goal list JSON array now:";
@@ -241,17 +256,78 @@ public class AutonomousGoalEngine {
                 return;
             }
 
+            // Skill selector: order goals by observed skill success so proven
+            // everyday tasks run first and repeatedly-failing ones are pushed
+            // back. The LLM's order is preserved as a tie-breaker. This is the
+            // explore/exploit policy over *skills* (not over individual RL
+            // actions), reading the same SkillExperienceStore HybridPlanner
+            // writes to.
+            List<String> ranked = rankGoalsBySkillExperience(goals);
+
+            // In creative mode the bot has unlimited blocks, so gather/mine/
+            // craft goals are pointless. Drop them from the autonomous LLM plan
+            // (player-requested goals via injectPlayerGoal are unaffected).
+            boolean creative = bot != null && bot.gameMode.getGameModeForPlayer().isCreative();
+
             int enqueued = 0;
-            for (String goal : goals) {
+            for (String goal : ranked) {
+                if (creative && isRedundantInCreative(goal)) {
+                    LOGGER.info("[autonomous] Skipping redundant '{}' in creative mode", goal);
+                    continue;
+                }
                 if (enqueue(new GoalQueueEntry(goal.trim(), 0, GoalQueueEntry.Source.LLM_PLAN))) {
                     enqueued++;
                 }
             }
-            LOGGER.info("[autonomous] Enqueued {} goals from LLM plan", enqueued);
+            LOGGER.info("[autonomous] Enqueued {} goals from LLM plan (skill-ranked)", enqueued);
 
         } catch (Exception e) {
             LOGGER.error("[autonomous] Goal generation failed: {}", e.getMessage(), e);
         }
+    }
+
+    /** Whether a goal is redundant in creative mode (package-visible for tests). */
+    static boolean isRedundantInCreative(String goal) {
+        short goalId = GoalMapper.parseGoal(goal);
+        return goalId == GoalMapper.GOAL_GATHER
+                || goalId == GoalMapper.GOAL_MINE
+                || goalId == GoalMapper.GOAL_CRAFT;
+    }
+
+    /**
+     * Order LLM-produced goals by observed skill success (descending), keeping
+     * the LLM's original order as a tie-breaker.
+     *
+     * <p>Scoring: a skill's score is its success rate minus a small penalty for
+     * untried skills so they get a chance (exploration), and a flat floor for
+     * skills with no data at all. Failed skills sink, proven skills float to
+     * the front. This is deliberately simple and side-effect-free — it only
+     * reorders, never drops.
+     */
+    List<String> rankGoalsBySkillExperience(List<String> goals) {
+        if (goals.size() <= 1) return new ArrayList<>(goals);
+
+        List<String> ranked = new ArrayList<>(goals);
+        ranked.sort(Comparator.comparingDouble((String goal) -> {
+            short goalId = GoalMapper.parseGoal(goal);
+            String skillKey = HybridPlanner.skillKeyForGoal(goalId, goal);
+            SkillExperienceStore.SkillStats s = skillStore.getStats(skillKey);
+            if (s.attempts == 0) {
+                return 0.5; // untried: neutral, above failures below proven
+            }
+            return s.successRate();
+        }).reversed());
+
+        if (LOGGER.isDebugEnabled()) {
+            for (String g : ranked) {
+                short id = GoalMapper.parseGoal(g);
+                var s = skillStore.getStats(HybridPlanner.skillKeyForGoal(id, g));
+                LOGGER.debug("[autonomous] skill-rank '{}' → {} ({} attempts, {:.0f}% success)",
+                        g, s.attempts == 0 ? "untried" : String.format("%.0f%%", s.successRate() * 100),
+                        s.attempts, s.successRate() * 100);
+            }
+        }
+        return ranked;
     }
 
     // -------------------------------------------------------------------------
@@ -381,6 +457,13 @@ public class AutonomousGoalEngine {
         sb.append("- Hunger: ").append(bot.getFoodData().getFoodLevel()).append(" / 20\n");
         sb.append("- Position: ").append(bot.blockPosition()).append("\n");
         sb.append("- Dimension: ").append(bot.level().dimension().identifier()).append("\n");
+
+        // Game mode: creative means the bot has unlimited blocks and does NOT
+        // need to mine/craft — the LLM must know this to avoid generating
+        // pointless gather/mine/craft goals.
+        String gameMode = bot.gameMode.getGameModeForPlayer().isCreative() ? "creative"
+                : (bot.gameMode.getGameModeForPlayer().isSurvival() ? "survival" : "other");
+        sb.append("- Game mode: ").append(gameMode).append("\n");
 
         long timeOfDay = bot.level().getDefaultClockTime() % 24000;
         String period = (timeOfDay < 6000) ? "morning" :

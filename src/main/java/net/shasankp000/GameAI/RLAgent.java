@@ -34,6 +34,12 @@ public class RLAgent {
     private State lastState = null;
     private Action lastAction = null;
 
+    // Rate-limit for high-frequency decision logs. AutoFaceEntity re-runs the
+    // policy every tick (33ms), so "No viable actions / Defaulting to STAY"
+    // would otherwise flood the console. Log at most once per interval.
+    private long lastDecisionLogAt = 0L;
+    private static final long DECISION_LOG_INTERVAL_MS = 5000L; // 5 seconds
+
 
     /**
      * Default constructor with epsilon initialized to 1.0.
@@ -108,7 +114,7 @@ public class RLAgent {
             // Pass history to play mode choice as well
             chosenAction = chooseActionPlayMode(state, qTable, riskMap, "chooseAction", history);
             if (chosenAction.equals(Action.STAY)) {
-                System.out.println("No suitable action found within the Qtable");
+                logDecisionThrottled("No suitable action found within the Qtable");
                 chosenAction = viableActions.entrySet().stream()
                         .min(Map.Entry.comparingByValue())
                         .map(Map.Entry::getKey)
@@ -189,7 +195,7 @@ public class RLAgent {
 
 
         if (viableActions.isEmpty()) {
-            System.out.println("No viable actions available. Defaulting to STAY.");
+            logDecisionThrottled("No viable actions available. Defaulting to STAY.");
             return Action.STAY;
         }
 
@@ -198,6 +204,19 @@ public class RLAgent {
                 .min(Map.Entry.comparingByValue())
                 .map(Map.Entry::getKey)
                 .orElse(Action.STAY);
+    }
+
+    /**
+     * Log a high-frequency decision message at most once per
+     * {@link #DECISION_LOG_INTERVAL_MS}, so the per-tick combat loop doesn't
+     * flood the console with identical STAY decisions.
+     */
+    private void logDecisionThrottled(String message) {
+        long now = System.currentTimeMillis();
+        if (now - lastDecisionLogAt >= DECISION_LOG_INTERVAL_MS) {
+            lastDecisionLogAt = now;
+            LOGGER.info("[rl-agent] {}", message);
+        }
     }
 
 

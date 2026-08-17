@@ -51,4 +51,18 @@ class GoalArrayParserTest {
         assertTrue(AutonomousGoalEngine.parseGoalArray("").isEmpty());
         assertTrue(AutonomousGoalEngine.parseGoalArray(null).isEmpty());
     }
+
+    @Test
+    void creativeModeMarksGatherMineCraftRedundant() {
+        assertTrue(AutonomousGoalEngine.isRedundantInCreative("gather 32 wood"));
+        assertTrue(AutonomousGoalEngine.isRedundantInCreative("mine 16 stone"));
+        assertTrue(AutonomousGoalEngine.isRedundantInCreative("craft a crafting table"));
+    }
+
+    @Test
+    void creativeModeKeepsBuildExploreNavigate() {
+        assertFalse(AutonomousGoalEngine.isRedundantInCreative("build a shelter"));
+        assertFalse(AutonomousGoalEngine.isRedundantInCreative("explore around"));
+        assertFalse(AutonomousGoalEngine.isRedundantInCreative("go to 120 70 -40"));
+    }
 }

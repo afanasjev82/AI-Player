@@ -96,9 +96,13 @@ public class HybridPlanner {
         }
 
         // 1b. Snapshot inventory before execution so we can measure the real
-        //     outcome (Phase C learning signal) for gather/mine goals.
-        int inventoryBefore = countInventoryItems(bot);
+        //     outcome (Phase C learning signal). For gather/mine we track the
+        //     specific drop item; for other goals total item count is enough.
         String skillKey = skillKeyForGoal(goalId, goalText);
+        String rewardItemKey = rewardItemKeyForGoal(goalId, goalText);
+        int inventoryBefore = rewardItemKey != null
+                ? countItemQuantity(bot, rewardItemKey)
+                : countTotalItems(bot);
 
         // 2. Build planner components.
         // The action graph must be populated from the ActionRegistry, otherwise
@@ -127,7 +131,7 @@ public class HybridPlanner {
                         goalText);
                 // Record the attempt as failed so unsupported goals (craft/farm/
                 // combat/trade) aren't silently counted as successes.
-                recordOutcome(skillKey, bot, inventoryBefore, false);
+                recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, false);
                 LOGGER.info("[HybridPlanner] Fallback: goal='{}' could not be planned by HybridPlanner; " +
                         "AutonomousGoalEngine should retry or route via LLM.", goalText);
                 return;
@@ -146,12 +150,12 @@ public class HybridPlanner {
 
             if (!executed) {
                 LOGGER.warn("[HybridPlanner] Plan execution failed for goal '{}'", goalText);
-                recordOutcome(skillKey, bot, inventoryBefore, false);
+                recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, false);
                 return;
             }
 
             LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);
-            recordOutcome(skillKey, bot, inventoryBefore, true);
+            recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, true);
 
         } finally {
             planner.shutdown();
@@ -162,20 +166,77 @@ public class HybridPlanner {
     // Phase C: everyday-task outcome measurement
     // -------------------------------------------------------------------------
 
-    /** Singleton skill-experience store (disk-backed, survives restarts). */
-    private static final SkillExperienceStore SKILL_STORE = new SkillExperienceStore();
+    /**
+     * Singleton skill-experience store (disk-backed, survives restarts).
+     * Lazily initialized: {@code SkillExperienceStore} resolves its file path
+     * via {@code FabricLoader.getGameDir()}, which throws "invoked too early?"
+     * outside a running game (e.g. unit tests). Deferring creation keeps pure
+     * helper methods ({@link #blockTypeToDropItem}, {@link #skillKeyForGoal})
+     * testable without a Fabric runtime.
+     */
+    private static volatile SkillExperienceStore SKILL_STORE = null;
 
-    /** Total non-empty stacks in the bot's inventory (proxy for gathered items). */
-    private static int countInventoryItems(ServerPlayer bot) {
-        int count = 0;
-        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
-            if (!bot.getInventory().getItem(i).isEmpty()) count++;
+    private static SkillExperienceStore skillStore() {
+        SkillExperienceStore store = SKILL_STORE;
+        if (store == null) {
+            synchronized (HybridPlanner.class) {
+                store = SKILL_STORE;
+                if (store == null) {
+                    store = new SkillExperienceStore();
+                    SKILL_STORE = store;
+                }
+            }
         }
-        return count;
+        return store;
     }
 
-    /** Skill key derived from goal id + text (e.g. "gather:minecraft:oak_log"). */
-    private static String skillKeyForGoal(short goalId, String goalText) {
+    /**
+     * Total item quantity in the bot's inventory (sum of all stack counts).
+     * This measures <em>items</em>, not slots — the old slot-count proxy was
+     * blind to stacks merging (e.g. 3 cobblestone + 1 mined = same slot count).
+     */
+    private static int countTotalItems(ServerPlayer bot) {
+        int total = 0;
+        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
+            total += bot.getInventory().getItem(i).getCount();
+        }
+        return total;
+    }
+
+    /** Count of a specific item id (by registry key) in the bot's inventory. */
+    private static int countItemQuantity(ServerPlayer bot, String itemKey) {
+        int total = 0;
+        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
+            var stack = bot.getInventory().getItem(i);
+            if (stack.isEmpty()) continue;
+            var id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
+            if (id != null && id.toString().equals(itemKey)) total += stack.getCount();
+        }
+        return total;
+    }
+
+    /** Map a mined block type to the item it actually drops (package-visible for tests). */
+    static String blockTypeToDropItem(String blockType) {
+        if (blockType == null) return null;
+        return switch (blockType) {
+            case "minecraft:stone"        -> "minecraft:cobblestone";
+            case "minecraft:coal_ore"     -> "minecraft:coal";
+            case "minecraft:iron_ore"     -> "minecraft:raw_iron";
+            case "minecraft:copper_ore"   -> "minecraft:raw_copper";
+            case "minecraft:gold_ore"     -> "minecraft:raw_gold";
+            case "minecraft:diamond_ore"  -> "minecraft:diamond";
+            case "minecraft:redstone_ore" -> "minecraft:redstone";
+            case "minecraft:lapis_ore"    -> "minecraft:lapis_lazuli";
+            case "minecraft:emerald_ore"  -> "minecraft:emerald";
+            default                       -> blockType; // oak_log, dirt, sand drop themselves
+        };
+    }
+
+    /**
+     * Skill key derived from goal id + text (e.g. "gather:minecraft:oak_log").
+     * Public so {@code AutonomousGoalEngine} can rank goals by this key.
+     */
+    public static String skillKeyForGoal(short goalId, String goalText) {
         String name = GoalMapper.getGoalName(goalId);
         if (goalId == GoalMapper.GOAL_GATHER || goalId == GoalMapper.GOAL_MINE) {
             return name + ":" + SkillPlanBuilder.inferBlockType(goalText);
@@ -184,24 +245,53 @@ public class HybridPlanner {
     }
 
     /**
-     * Record the observed outcome of a goal attempt. For gather/mine the reward
-     * is the inventory delta (items gained); other goals record success/failure
-     * with a 1.0/-1.0 reward. This is the learning signal that {@code training}
-     * mode's combat Q-table never provided for everyday work.
+     * The concrete item whose quantity delta measures a gather/mine goal's
+     * reward, or {@code null} for goals that use a simple success signal.
      */
-    private static void recordOutcome(String skillKey, ServerPlayer bot,
-                                      int inventoryBefore, boolean success) {
-        int inventoryAfter = countInventoryItems(bot);
-        double reward = (double) (inventoryAfter - inventoryBefore);
+    private static String rewardItemKeyForGoal(short goalId, String goalText) {
+        if (goalId == GoalMapper.GOAL_GATHER || goalId == GoalMapper.GOAL_MINE) {
+            return blockTypeToDropItem(SkillPlanBuilder.inferBlockType(goalText));
+        }
+        return null;
+    }
 
-        // Non-gather goals: reward is a simple success signal.
-        if (!skillKey.startsWith("gather") && !skillKey.startsWith("mine")) {
+    /**
+     * Record the observed outcome of a goal attempt.
+     *
+     * <p>For gather/mine the reward is the delta in the <em>target resource</em>
+     * (items gained of the mined block's drop); other goals record a 1.0/-1.0
+     * success signal. This is the learning signal {@code training} mode's
+     * combat Q-table never provided for everyday work.
+     *
+     * <p>In <b>creative</b> mode the bot has unlimited resources, so gather/mine
+     * has nothing meaningful to measure (no drops, no scarcity). Those goals are
+     * still recorded as a neutral success so the skill selector doesn't punish
+     * them, but the reward is 0.0 rather than a misleading negative delta.
+     */
+    private static void recordOutcome(String skillKey, String rewardItemKey,
+                                      ServerPlayer bot, int before, boolean success) {
+        boolean creative = bot != null
+                && bot.gameMode.getGameModeForPlayer().isCreative();
+
+        double reward;
+        int after;
+        if (creative) {
+            // Creative: unlimited resources → gather/mine deltas are meaningless.
+            // Reward the *decision* (successful execution) rather than item gain.
+            after = countTotalItems(bot);
+            reward = success ? 0.5 : -1.0;
+        } else if (rewardItemKey != null) {
+            after = countItemQuantity(bot, rewardItemKey);
+            reward = (double) (after - before);
+        } else {
+            after = countTotalItems(bot);
             reward = success ? 1.0 : -1.0;
         }
 
-        SKILL_STORE.recordOutcome(skillKey, success, reward);
-        LOGGER.info("[skill] outcome '{}': success={}, reward={} (inventory {}→{})",
-                skillKey, success, reward, inventoryBefore, inventoryAfter);
+        skillStore().recordOutcome(skillKey, success, reward);
+        LOGGER.info("[skill] outcome '{}': success={}, reward={} ({} {}→{})",
+                skillKey, success, reward,
+                rewardItemKey != null ? rewardItemKey : "items", before, after);
     }
 
     // -------------------------------------------------------------------------

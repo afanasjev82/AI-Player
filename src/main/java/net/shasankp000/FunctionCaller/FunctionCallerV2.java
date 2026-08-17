@@ -1917,6 +1917,12 @@ public class FunctionCallerV2 {
                     getFunctionOutput(bot == null ? "Bot not found."
                             : StructureBuilder.build(bot, structure, blockType).join());
                 }
+                case "collect" -> {
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: collect");
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : CollectTool.collectNearby(bot).join());
+                }
                 case "combat" -> {
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
                     logger.info("Calling method: combat");
@@ -2218,8 +2224,9 @@ public class FunctionCallerV2 {
 
             case "combat":
             case "trade":
+            case "collect":
                 // No parameters: the tools locate their own target / report
-                // the bot's own inventory.
+                // the bot's own inventory / collect nearby drops.
                 break;
 
             case "turn":
@@ -2431,6 +2438,7 @@ public class FunctionCallerV2 {
             case "shield":
             case "combat":
             case "trade":
+            case "collect":
             case "gethealthlevel":
             case "gethungerlevel":
             case "getoxygenlevel":
