@@ -65,4 +65,12 @@ class GoalArrayParserTest {
         assertFalse(AutonomousGoalEngine.isRedundantInCreative("explore around"));
         assertFalse(AutonomousGoalEngine.isRedundantInCreative("go to 120 70 -40"));
     }
+
+    @Test
+    void undergroundDescentGoalIsMineOnly() {
+        assertTrue(AutonomousGoalEngine.isUndergroundDescentGoal("mine 16 stone"));
+        assertFalse(AutonomousGoalEngine.isUndergroundDescentGoal("gather 32 wood"));
+        assertFalse(AutonomousGoalEngine.isUndergroundDescentGoal("build a shelter"));
+        assertFalse(AutonomousGoalEngine.isUndergroundDescentGoal("explore around"));
+    }
 }

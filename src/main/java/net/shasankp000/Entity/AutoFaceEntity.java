@@ -78,6 +78,21 @@ public class AutoFaceEntity {
     // Flag to prevent chat spam for "terminating all tasks" message
     private static boolean threatMessageSent = false; // Set to true when message sent, reset when out of danger
 
+    // Rate-limit for per-tick threat-detection logging. The autoface loop runs
+    // every 33ms, so "Closest hostile entity / Triggering handler" would flood
+    // the console otherwise. Log at most once per interval.
+    private static long lastThreatLogAt = 0L;
+    private static final long THREAT_LOG_INTERVAL_MS = 5000L; // 5 seconds
+
+    /** Log a threat-detection message at most once per {@link #THREAT_LOG_INTERVAL_MS}. */
+    private static void logThreatThrottled(String message) {
+        long now = System.currentTimeMillis();
+        if (now - lastThreatLogAt >= THREAT_LOG_INTERVAL_MS) {
+            lastThreatLogAt = now;
+            LOGGER.info("[autoface] {}", message);
+        }
+    }
+
     public static void setBotExecutingTask(boolean value) {
         botExecutingTask = value;
     }
@@ -321,7 +336,7 @@ public class AutoFaceEntity {
 
                     if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
 
-                        System.out.println("Hostile mobs detected while bot is executing jobs!");
+                        logThreatThrottled("Hostile mobs detected while bot is executing jobs!");
 
 
                         if (distanceToHostileEntity <= 32.0) {
@@ -332,19 +347,18 @@ public class AutoFaceEntity {
 
 
 
-                            // Log details of the detected hostile entity
-                            System.out.println("Closest hostile entity: " + closestHostile.getName().getString()
-                                    + " at distance: " + distanceToHostileEntity);
+                            // Log details of the detected hostile entity (throttled)
+                            logThreatThrottled("Closest hostile entity: " + closestHostile.getName().getString()
+                                    + " at distance: " + String.format("%.1f", distanceToHostileEntity));
 
                             botBusy = true; // Set the bot as busy if hostile entities are in range
                             hostileEntityInFront = true;
 
                             // Trigger the handler
                             if (isHandlerTriggered) {
-                                System.out.println("isHandlerTriggered: " + isHandlerTriggered);
-                                System.out.println("Handler already triggered. Skipping.");
+                                logThreatThrottled("Handler already triggered. Skipping.");
                             } else {
-                                System.out.println("Triggering handler for hostile entity.");
+                                logThreatThrottled("Triggering handler for hostile entity.");
                                 isHandlerTriggered = true;
 
                                 BotEventHandler eventHandler = new BotEventHandler(server, bot);
@@ -393,8 +407,8 @@ public class AutoFaceEntity {
 
                             // Log details of the detected hostile entity (only once)
                             if (!isHandlerTriggered) {
-                                System.out.println("Closest hostile entity: " + closestHostile.getName().getString()
-                                        + " at distance: " + distanceToHostileEntity);
+                                logThreatThrottled("Closest hostile entity: " + closestHostile.getName().getString()
+                                        + " at distance: " + String.format("%.1f", distanceToHostileEntity));
                             }
 
                             botBusy = true; // Set the bot as busy if hostile entities are in range
@@ -405,7 +419,7 @@ public class AutoFaceEntity {
                                 // Handler already running for this threat, skip to avoid infinite loop
                                 return;
                             } else {
-                                System.out.println("Triggering handler for hostile entity.");
+                                logThreatThrottled("Triggering handler for hostile entity.");
                                 isHandlerTriggered = true;
 
                                 BotEventHandler eventHandler = new BotEventHandler(server, bot);

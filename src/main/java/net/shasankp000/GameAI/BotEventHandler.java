@@ -17,6 +17,7 @@ import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.cubemob.Slime;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.shasankp000.Entity.FaceClosestEntity;
 import net.shasankp000.LauncherDetection.LauncherEnvironment;
@@ -82,6 +83,14 @@ public class BotEventHandler {
     private static final long NIGHT_SLEEP_DECISION_INTERVAL_MS = TimeUnit.SECONDS.toMillis(15);
     private static final Map<UUID, Long> lastLowHungerDecision = new HashMap<>();
     private static final long LOW_HUNGER_DECISION_INTERVAL_MS = TimeUnit.SECONDS.toMillis(2);
+
+    // Surface-depth penalty: discourage aimless burrowing below ground level.
+    // Only applies beyond this depth below the surface, so normal walking on
+    // slightly-undulating terrain isn't punished. Deliberate mining/tasks that
+    // bring the bot underground still work — this only shapes the *reward*, it
+    // does not block any action.
+    private static final int UNDERGROUND_THRESHOLD = 5;        // blocks below surface before penalty kicks in
+    private static final double UNDERGROUND_PENALTY_PER_BLOCK = 1.5; // reward lost per block below threshold
 
     // Singleton RLAgent – lazily created and cached for external callers
     private static RLAgent cachedRLAgent = null;
@@ -521,6 +530,7 @@ public class BotEventHandler {
 
                 reward = applySleepReward(chosenAction, reward);
                 reward = applyFoodReward(chosenAction, reward);
+                reward = applySurfaceDepthPenalty(bot, reward);
 
                 System.out.println("Reward: " + reward);
 
@@ -681,6 +691,7 @@ public class BotEventHandler {
 
                 reward = applySleepReward(chosenAction, reward);
                 reward = applyFoodReward(chosenAction, reward);
+                reward = applySurfaceDepthPenalty(bot, reward);
 
                 System.out.println("Reward: " + reward);
 
@@ -745,7 +756,6 @@ public class BotEventHandler {
             synchronized (monitorLock) {
                 isExecuting = false;
                 AutoFaceEntity.isHandlerTriggered = false;
-                System.out.println("Resetting handler trigger flag to: " + false);
             }
         }
     }
@@ -823,7 +833,7 @@ public class BotEventHandler {
                         attackFallbackRateLimited(bot, "Q-table empty or policy chose STAY");
                     } else {
                         // Log chosen action for debugging
-                        System.out.println("Play Mode - Chosen action: " + chosenAction);
+                        LOGGER.debug("Play Mode - Chosen action: {}", chosenAction);
                         executeAction(chosenAction, botSource);
                     }
                 }
@@ -840,7 +850,7 @@ public class BotEventHandler {
 
 
                     // Log chosen action for debugging
-                    System.out.println("Play Mode - Chosen action: " + chosenAction);
+                    LOGGER.debug("Play Mode - Chosen action: {}", chosenAction);
 
                     // Execute action
                     executeAction(chosenAction, botSource);
@@ -856,7 +866,6 @@ public class BotEventHandler {
             // ─────────────────────────────────────────────────────────────────────
 
             synchronized (monitorLock) {
-                System.out.println("Resetting handler trigger flag.");
                 isExecuting = false;
                 AutoFaceEntity.isHandlerTriggered = false; // Reset the trigger flag
             }
@@ -947,6 +956,42 @@ public class BotEventHandler {
         if (!lastFoodConsumption.attempted()) return reward;
         if (!lastFoodConsumption.success()) return reward - 15.0;
         return reward + 20.0 + (lastFoodConsumption.hungerGained() * 4.0);
+    }
+
+    /**
+     * Penalize the bot for going deep underground on its own.
+     *
+     * <p>Returns the reward unchanged when the bot is at/near the surface
+     * (within {@value #UNDERGROUND_THRESHOLD} blocks below the highest solid
+     * block at its XZ column), or when the depth is part of a legitimate
+     * goal context. Otherwise subtracts a depth-proportional penalty, so the
+     * bot learns that aimless burrowing is undesirable but deliberate
+     * mining/tasks are not discouraged.
+     *
+     * <p>The surface reference uses {@link Heightmap.Types#MOTION_BLOCKING_NO_LEAVES},
+     * which tracks the top solid (non-leaf) block — a stable "ground level"
+     * unaffected by tree canopies.
+     */
+    private static double applySurfaceDepthPenalty(ServerPlayer bot, double reward) {
+        if (bot == null || bot.level() == null || bot.level().isClientSide()) {
+            return reward;
+        }
+        int botY = bot.blockPosition().getY();
+        int surfaceY = bot.level().getHeight(
+                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                bot.blockPosition().getX(),
+                bot.blockPosition().getZ());
+
+        int depth = surfaceY - botY;
+        if (depth <= UNDERGROUND_THRESHOLD) {
+            return reward; // at/near surface — no penalty
+        }
+
+        // Progressive penalty: shallow dips are cheap, deep burrows are not.
+        double penalty = UNDERGROUND_PENALTY_PER_BLOCK * (depth - UNDERGROUND_THRESHOLD);
+        LOGGER.debug("[reward] Surface-depth penalty: botY={}, surfaceY={}, depth={}, penalty={}",
+                botY, surfaceY, depth, penalty);
+        return reward - penalty;
     }
 
 

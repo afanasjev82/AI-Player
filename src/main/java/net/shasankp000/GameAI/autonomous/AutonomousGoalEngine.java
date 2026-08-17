@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
@@ -59,6 +60,15 @@ public class AutonomousGoalEngine {
      * per this window breaks that redundant re-trigger loop.
      */
     private static final long BUILD_GOAL_COOLDOWN_MS = 60_000L;
+
+    /**
+     * Depth (blocks below the surface) beyond which the autonomous loop stops
+     * generating new self-directed goals that would send the bot further
+     * underground. Mirrors the RL surface-depth penalty; the deterministic
+     * planner still honours explicit mining goals, but aimless self-directed
+     * burrowing is suppressed.
+     */
+    private static final int UNDERGROUND_SUPPRESS_DEPTH = 5;
 
     // -------------------------------------------------------------------------
     // State
@@ -239,7 +249,11 @@ public class AutonomousGoalEngine {
                     "IMPORTANT: if the bot's game mode is 'creative', it already has unlimited " +
                     "resources, so do NOT generate gather/mine/craft goals (there is nothing to " +
                     "collect or craft). Focus instead on building, exploring, and using blocks " +
-                    "already available in the creative inventory.";
+                    "already available in the creative inventory.\n" +
+                    "IMPORTANT: if the bot is already deep underground (depth below surface is " +
+                    "large), do NOT generate goals that would send it deeper (mining, digging, " +
+                    "caving). Prefer goals that return it to the surface or work near the " +
+                    "surface.";
 
             String userPrompt = "Bot state:\n" + stateSnapshot +
                     "\n\nGenerate the goal list JSON array now:";
@@ -269,10 +283,20 @@ public class AutonomousGoalEngine {
             // (player-requested goals via injectPlayerGoal are unaffected).
             boolean creative = bot != null && bot.gameMode.getGameModeForPlayer().isCreative();
 
+            // If the bot is already deep underground, suppress self-directed
+            // "mine" goals (which would drive it deeper). Explicit player goals
+            // and the deterministic planner are unaffected.
+            boolean alreadyDeep = bot != null && depthBelowSurface(bot) > UNDERGROUND_SUPPRESS_DEPTH;
+
             int enqueued = 0;
             for (String goal : ranked) {
                 if (creative && isRedundantInCreative(goal)) {
                     LOGGER.info("[autonomous] Skipping redundant '{}' in creative mode", goal);
+                    continue;
+                }
+                if (alreadyDeep && isUndergroundDescentGoal(goal)) {
+                    LOGGER.info("[autonomous] Skipping underground-descent '{}' (already {} blocks deep)",
+                            goal, depthBelowSurface(bot));
                     continue;
                 }
                 if (enqueue(new GoalQueueEntry(goal.trim(), 0, GoalQueueEntry.Source.LLM_PLAN))) {
@@ -292,6 +316,14 @@ public class AutonomousGoalEngine {
         return goalId == GoalMapper.GOAL_GATHER
                 || goalId == GoalMapper.GOAL_MINE
                 || goalId == GoalMapper.GOAL_CRAFT;
+    }
+
+    /** Whether a self-directed goal would send the bot further underground. */
+    static boolean isUndergroundDescentGoal(String goal) {
+        short goalId = GoalMapper.parseGoal(goal);
+        // "mine" is the descent driver; "gather" of ore/logs can also dig, but
+        // is more ambiguous — keep it simple and suppress only mine.
+        return goalId == GoalMapper.GOAL_MINE;
     }
 
     /**
@@ -465,6 +497,12 @@ public class AutonomousGoalEngine {
                 : (bot.gameMode.getGameModeForPlayer().isSurvival() ? "survival" : "other");
         sb.append("- Game mode: ").append(gameMode).append("\n");
 
+        // Surface depth: tells the LLM whether the bot is already underground
+        // so it avoids generating goals that would send it deeper.
+        int depth = depthBelowSurface(bot);
+        sb.append("- Depth below surface: ").append(depth)
+          .append(" blocks").append(depth > UNDERGROUND_SUPPRESS_DEPTH ? " (already underground)" : "").append("\n");
+
         long timeOfDay = bot.level().getDefaultClockTime() % 24000;
         String period = (timeOfDay < 6000) ? "morning" :
                         (timeOfDay < 12000) ? "afternoon" :
@@ -484,6 +522,21 @@ public class AutonomousGoalEngine {
         sb.append("- Inventory slots used: ").append(itemCount).append(" / 36\n");
 
         return sb.toString();
+    }
+
+    /**
+     * Depth (blocks) of the bot below the highest solid (non-leaf) block at its
+     * XZ column. Non-negative; 0 means at/near the surface. Uses
+     * {@link Heightmap.Types#MOTION_BLOCKING_NO_LEAVES} so tree canopies don't
+     * skew the result.
+     */
+    private static int depthBelowSurface(ServerPlayer bot) {
+        if (bot == null || bot.level() == null || bot.level().isClientSide()) return 0;
+        int surfaceY = bot.level().getHeight(
+                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                bot.blockPosition().getX(),
+                bot.blockPosition().getZ());
+        return Math.max(0, surfaceY - bot.blockPosition().getY());
     }
 
     private String callLLM(String provider, String systemPrompt, String userPrompt) {

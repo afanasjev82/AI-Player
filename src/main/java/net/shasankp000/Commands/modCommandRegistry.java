@@ -1133,9 +1133,20 @@ public class modCommandRegistry {
 
         Vec3 pos = new Vec3(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
 
-        GameType mode = GameType.SURVIVAL;
-
         botName = StringArgumentType.getString(context, "bot_name");
+
+        // Match the world the bot is spawning into: read the level's own game
+        // type so a creative world spawns the bot in creative (and a survival
+        // world in survival). The player can still override afterwards with
+        // /gamemode — this only sets the initial value on spawn.
+        GameType mode = GameType.SURVIVAL;
+        if (server.overworld() != null) {
+            var levelData = server.overworld().getLevelData();
+            if (levelData instanceof net.minecraft.world.level.storage.ServerLevelData sld) {
+                mode = sld.getGameType();
+            }
+        }
+        LOGGER.info("Spawning bot '{}' with world game type: {}", botName, mode);
 
         CommandSourceStack serverSource = server.createCommandSourceStack();
 
