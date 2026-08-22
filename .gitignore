@@ -40,3 +40,9 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# ---- graphify knowledge-graph output ----
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/graph.html
+!graphify-out/manifest.json
