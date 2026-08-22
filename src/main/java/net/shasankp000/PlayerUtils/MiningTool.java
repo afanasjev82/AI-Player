@@ -2,6 +2,7 @@ package net.shasankp000.PlayerUtils;
 
 import java.util.concurrent.*;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -35,7 +36,7 @@ public class MiningTool {
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
                     if (FoodConsumptionTool.isConsumptionInProgress(bot.getUUID())) return;
 
-                    MinecraftServer server = bot.getServer();
+                    MinecraftServer server = bot.level().getServer();
                     if (server == null) {
                         miningResult.complete("⚠️ Server not found");
                         miningExecutor.shutdownNow();
