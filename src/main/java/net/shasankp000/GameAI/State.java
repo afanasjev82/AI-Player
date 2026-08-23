@@ -18,28 +18,11 @@ public class State implements Serializable {
     private static final double ENTITY_SIMILARITY_THRESHOLD = 0.5; // 50% overlap
     private static final double BLOCK_SIMILARITY_THRESHOLD = 0.5; // 50% overlap
 
-    private final int botX, botY, botZ;
-    private final int frostLevel;
-    private final double distanceToHostileEntity;
-    private final double distanceToDangerZone;
-    private final int botHealth;
-    private final List<String> hotBarItems; // Serialized as a list of item names
-    private final SelectedItemDetails selectedItem;
-    private final String timeOfDay;
-    private final String dimensionType;
-    private final int botHungerLevel;
-    private final int botOxygenLevel;
+    // Immutable world observation — owned by WorldSnapshot (god-object split).
+    private final WorldSnapshot snapshot;
 
-    private final String offhandItem; // Serialized as the item name
-    private final Map<String, String> armorItems; // Serialized as a map of item names
-
-    private final StateActions.Action actionTaken;
-    private final List<EntityDetails> nearbyEntities;
-    private Map<StateActions.Action, Double> riskMap;
-    private final double riskAppetite;
-    private final List<String> nearbyBlocks;
-    private Map<StateActions.Action, Double> podMap;
-    private final boolean inDangerousStructure;
+    // Mutable RL learning state — owned by LearningState (god-object split).
+    private final LearningState learning;
 
 
 
@@ -49,68 +32,61 @@ public class State implements Serializable {
                  int botHungerLevel, int botOxygenLevel, int frostLevel ,ItemStack offhandItem, Map<String, ItemStack> armorItems,
                  StateActions.Action actionTaken, Map<StateActions.Action, Double> riskMap , double riskAppetite, Map<StateActions.Action, Double> podMap) {
 
-        this.botX = botX;
-        this.botY = botY;
-        this.botZ = botZ;
-        this.frostLevel = frostLevel;
+        // Convert ItemStack to Strings for serialization, then build the
+        // immutable observation snapshot.
+        this.snapshot = new WorldSnapshot(
+                botX, botY, botZ,
+                nearbyEntities,
+                nearbyBlocks,
+                distanceToHostileEntity,
+                botHealth,
+                distanceToDangerZone,
+                serializeItemStackList(hotBarItems),
+                selectedItem,
+                timeOfDay,
+                dimensionType,
+                botHungerLevel,
+                botOxygenLevel,
+                frostLevel,
+                serializeItemStack(offhandItem),
+                serializeArmorItems(armorItems)
+        );
 
-        this.distanceToHostileEntity = distanceToHostileEntity;
-        this.distanceToDangerZone = distanceToDangerZone;
-        this.botHealth = botHealth;
-
-        // Convert ItemStack to Strings for serialization
-        this.hotBarItems = serializeItemStackList(hotBarItems);
-        this.selectedItem = selectedItem;
-        this.timeOfDay = timeOfDay;
-        this.dimensionType = dimensionType;
-        this.botHungerLevel = botHungerLevel;
-        this.botOxygenLevel = botOxygenLevel;
-
-        this.offhandItem = serializeItemStack(offhandItem);
-        this.armorItems = serializeArmorItems(armorItems);
-        this.actionTaken = actionTaken;
-
-        this.nearbyEntities = nearbyEntities;
-
-        this.riskMap = riskMap;
-        this.riskAppetite = riskAppetite;
-        this.nearbyBlocks = nearbyBlocks;
-        this.podMap = podMap;
-        this.inDangerousStructure = detectDangerousStructure(nearbyBlocks); // Placeholder logic
+        this.learning = new LearningState(actionTaken, riskAppetite, riskMap, podMap);
     }
 
-    // Getters for state variables
-    public int getBotX() { return botX; }
-    public int getBotY() { return botY; }
-    public int getBotZ() { return botZ; }
-    public double getDistanceToHostileEntity() { return distanceToHostileEntity; }
-    public int getBotHealth() { return botHealth; }
-    public double getDistanceToDangerZone() { return distanceToDangerZone; }
-    public List<String> getHotBarItems() { return hotBarItems; }
-    public String getSelectedItem() { return selectedItem.getName(); }
-    public SelectedItemDetails getSelectedItemStack() { return selectedItem; }
-    public String getTimeOfDay() { return timeOfDay; }
-    public String getDimensionType() { return dimensionType; }
-    public int getBotHungerLevel() { return botHungerLevel; }
-    public int getBotOxygenLevel() { return botOxygenLevel; }
-    public String getOffhandItem() { return offhandItem; }
-    public Map<String, String> getArmorItems() { return armorItems; }
-    public StateActions.Action getActionTaken() { return actionTaken; }
-    public List<EntityDetails> getNearbyEntities() { return nearbyEntities;}
-    public List<String> getNearbyBlocks() { return nearbyBlocks; }
-    public int getFrostLevel() { return frostLevel; }
-    public Map<StateActions.Action, Double> getRiskMap() { return riskMap;}
-    public double getRiskAppetite() {return riskAppetite;}
-    public Map<StateActions.Action, Double> getPodMap() {return podMap;}
-    public boolean isInDangerousStructure() { return inDangerousStructure; }
+    // Getters for state variables (delegated to the immutable snapshot)
+    public int getBotX() { return snapshot.getBotX(); }
+    public int getBotY() { return snapshot.getBotY(); }
+    public int getBotZ() { return snapshot.getBotZ(); }
+    public double getDistanceToHostileEntity() { return snapshot.getDistanceToHostileEntity(); }
+    public int getBotHealth() { return snapshot.getBotHealth(); }
+    public double getDistanceToDangerZone() { return snapshot.getDistanceToDangerZone(); }
+    public List<String> getHotBarItems() { return snapshot.getHotBarItems(); }
+    public String getSelectedItem() { return snapshot.getSelectedItem(); }
+    public SelectedItemDetails getSelectedItemStack() { return snapshot.getSelectedItemStack(); }
+    public String getTimeOfDay() { return snapshot.getTimeOfDay(); }
+    public String getDimensionType() { return snapshot.getDimensionType(); }
+    public int getBotHungerLevel() { return snapshot.getBotHungerLevel(); }
+    public int getBotOxygenLevel() { return snapshot.getBotOxygenLevel(); }
+    public String getOffhandItem() { return snapshot.getOffhandItem(); }
+    public Map<String, String> getArmorItems() { return snapshot.getArmorItems(); }
+    public StateActions.Action getActionTaken() { return learning.getActionTaken(); }
+    public List<EntityDetails> getNearbyEntities() { return snapshot.getNearbyEntities();}
+    public List<String> getNearbyBlocks() { return snapshot.getNearbyBlocks(); }
+    public int getFrostLevel() { return snapshot.getFrostLevel(); }
+    public Map<StateActions.Action, Double> getRiskMap() { return learning.getRiskMap();}
+    public double getRiskAppetite() {return learning.getRiskAppetite();}
+    public Map<StateActions.Action, Double> getPodMap() {return learning.getPodMap();}
+    public boolean isInDangerousStructure() { return snapshot.isInDangerousStructure(); }
 
 
     public void setPodMap(Map<StateActions.Action, Double> podMap) {
-        this.podMap = podMap;
+        this.learning.setPodMap(podMap);
     }
 
     public void setRiskMap(Map<StateActions.Action, Double> riskMap) {
-        this.riskMap = riskMap;
+        this.learning.setRiskMap(riskMap);
     }
 
 
@@ -163,28 +139,28 @@ public class State implements Serializable {
     @Override
     public String toString() {
         return "State{" +
-                "bucketX =" + botX +
-                ", bucketY =" + botY +
-                ", bucketZ =" + botZ +
-                ", nearbyEntities = " + nearbyEntities +
-                ", nearbyBlocks = " + nearbyBlocks +
-                ", inDangerousStructure = " + inDangerousStructure +
-                ", distanceToHostileEntity = " + distanceToHostileEntity +
-                ", distanceToDangerZone = " + distanceToDangerZone +
-                ", botHealth = " + botHealth +
-                ", hotBarItems = " + hotBarItems +
-                ", selectedItem = '" + selectedItem.getName() + '\'' +
-                ", timeOfDay = '" + timeOfDay + '\'' +
-                ", dimensionType = '" + dimensionType + '\'' +
-                ", botHungerLevel = " + botHungerLevel +
-                ", botOxygenLevel = " + botOxygenLevel +
-                ", botFrostLevel = " + frostLevel +
-                ", offhandItem ='" + offhandItem + '\'' +
-                ", armorItems =" + armorItems +
-                ", actionTaken =" + actionTaken +
-                ", riskMap = " + riskMap +
-                ", riskAppetite = " + riskAppetite +
-                ", podMap = " + podMap +
+                "bucketX =" + getBotX() +
+                ", bucketY =" + getBotY() +
+                ", bucketZ =" + getBotZ() +
+                ", nearbyEntities = " + getNearbyEntities() +
+                ", nearbyBlocks = " + getNearbyBlocks() +
+                ", inDangerousStructure = " + isInDangerousStructure() +
+                ", distanceToHostileEntity = " + getDistanceToHostileEntity() +
+                ", distanceToDangerZone = " + getDistanceToDangerZone() +
+                ", botHealth = " + getBotHealth() +
+                ", hotBarItems = " + getHotBarItems() +
+                ", selectedItem = '" + getSelectedItem() + '\'' +
+                ", timeOfDay = '" + getTimeOfDay() + '\'' +
+                ", dimensionType = '" + getDimensionType() + '\'' +
+                ", botHungerLevel = " + getBotHungerLevel() +
+                ", botOxygenLevel = " + getBotOxygenLevel() +
+                ", botFrostLevel = " + getFrostLevel() +
+                ", offhandItem ='" + getOffhandItem() + '\'' +
+                ", armorItems =" + getArmorItems() +
+                ", actionTaken =" + learning.getActionTaken() +
+                ", riskMap = " + learning.getRiskMap() +
+                ", riskAppetite = " + learning.getRiskAppetite() +
+                ", podMap = " + learning.getPodMap() +
                 '}';
     }
 
@@ -249,38 +225,4 @@ public class State implements Serializable {
         // Calculate overlap ratio (based on exact matches)
         return (double) exactNameMatches / Math.max(lastEntities.size(), currentEntities.size());
     }
-
-
-    /**
-     * Improved structure detection logic: checks dimension and requires a cluster of structure-unique blocks.
-     * This reduces false positives from player builds.
-     */
-    private boolean detectDangerousStructure(List<String> nearbyBlocks) {
-        // Get dimension
-        String dim = this.dimensionType != null ? this.dimensionType : "minecraft:overworld";
-        int fortressBlocks = 0, bastionBlocks = 0, trialBlocks = 0, dungeonBlocks = 0;
-
-        // Count unique structure blocks in the cluster
-        for (String block : nearbyBlocks) {
-            // Nether Fortress: Only in Nether, require at least 3 unique fortress blocks
-            if (dim.contains("nether") && (block.contains("nether_bricks") || block.contains("nether_brick_fence") || block.contains("nether_brick_stairs"))) {
-                fortressBlocks++;
-            }
-            // Bastion Remnant: Only in Nether, require at least 3 unique bastion blocks
-            if (dim.contains("nether") && (block.contains("gilded_blackstone") || block.contains("polished_blackstone_bricks") || block.contains("chiseled_polished_blackstone"))) {
-                bastionBlocks++;
-            }
-            // Trial Chamber: Only in Overworld, require at least 2 unique trial blocks
-            if (dim.contains("overworld") && (block.contains("trial_spawner") || block.contains("copper_bulb") || block.contains("tuff_bricks") || block.contains("chiseled_tuff_bricks"))) {
-                trialBlocks++;
-            }
-            // Dungeon: Only in Overworld, require at least 2 unique dungeon blocks
-            if (dim.contains("overworld") && (block.contains("mossy_cobblestone") || block.contains("spawner"))) {
-                dungeonBlocks++;
-            }
-        }
-        // Require a cluster (not just one block) to reduce false positives
-        return fortressBlocks >= 3 || bastionBlocks >= 3 || trialBlocks >= 2 || dungeonBlocks >= 2;
-    }
-
 }

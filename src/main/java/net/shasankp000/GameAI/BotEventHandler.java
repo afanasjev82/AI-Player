@@ -64,11 +64,10 @@ public class BotEventHandler {
     public static int botSpawnCount = 0;
     private static State currentState = null;
 
-    // Action execution tracking - prevents action spam and ensures completion
-    private static final Map<String, Boolean> actionInProgress = new HashMap<>();
-    private static final Map<String, String> currentAction = new HashMap<>();
-    private static final Map<String, Long> actionStartTime = new HashMap<>();
-    private static final long ACTION_TIMEOUT_MS = 5000; // 5 second timeout per action
+    // Action execution tracking - prevents action spam and ensures completion.
+    // State + logic owned by ActionTracker (god-object split, step 3); the
+    // static methods below are thin delegating wrappers to preserve the API.
+    private static final ActionTracker actionTracker = new ActionTracker();
 
     // State transition tracking for lookahead learning
     private static final StateTransition.TransitionHistory transitionHistory =
@@ -742,7 +741,7 @@ public class BotEventHandler {
             // ⏸ Wait for any ongoing action to complete before next RL loop iteration
             String botName = bot.getName().getString();
             if (isActionInProgress(botName)) {
-                LOGGER.info("[RL-LOOP] Waiting for action '{}' to complete...", currentAction.get(botName));
+                LOGGER.info("[RL-LOOP] Waiting for action '{}' to complete...", actionTracker.getCurrentAction(botName));
                 waitForActionCompletion(botName, 3000); // Wait up to 3 seconds
             }
 
@@ -1140,7 +1139,7 @@ public class BotEventHandler {
 
                 // ⏸ BLOCK if action in progress
                 if (isActionInProgress(botName)) {
-                    System.out.println("❌ ATTACK blocked - another action in progress: " + currentAction.get(botName));
+                    System.out.println("❌ ATTACK blocked - another action in progress: " + actionTracker.getCurrentAction(botName));
                     break;
                 }
 
@@ -1204,7 +1203,7 @@ public class BotEventHandler {
 
                 // ⏸ BLOCK if action in progress
                 if (isActionInProgress(botName)) {
-                    System.out.println("❌ SHOOT_ARROW blocked - another action in progress: " + currentAction.get(botName));
+                    System.out.println("❌ SHOOT_ARROW blocked - another action in progress: " + actionTracker.getCurrentAction(botName));
                     break;
                 }
 
@@ -1257,7 +1256,7 @@ public class BotEventHandler {
 
                 // ⏸ BLOCK if action in progress
                 if (isActionInProgress(botName)) {
-                    System.out.println("❌ EVADE blocked - another action in progress: " + currentAction.get(botName));
+                    System.out.println("❌ EVADE blocked - another action in progress: " + actionTracker.getCurrentAction(botName));
                     break;
                 }
 
@@ -1960,51 +1959,18 @@ public class BotEventHandler {
     // ==================== ACTION TRACKING HELPERS ====================
 
     public static boolean isActionInProgress(String botName) {
-        Boolean inProgress = actionInProgress.get(botName);
-        if (inProgress == null || !inProgress) return false;
-
-        // Check for timeout
-        Long startTime = actionStartTime.get(botName);
-        if (startTime != null && System.currentTimeMillis() - startTime > ACTION_TIMEOUT_MS) {
-            LOGGER.warn("[ACTION] Action '{}' timed out after {}ms - forcing completion",
-                currentAction.get(botName), ACTION_TIMEOUT_MS);
-            completeAction(botName);
-            return false;
-        }
-        return true;
+        return actionTracker.isInProgress(botName);
     }
 
     public static void startAction(String botName, String actionName) {
-        actionInProgress.put(botName, true);
-        currentAction.put(botName, actionName);
-        actionStartTime.put(botName, System.currentTimeMillis());
-        LOGGER.debug("[ACTION] Started: {}", actionName);
+        actionTracker.start(botName, actionName);
     }
 
     public static void completeAction(String botName) {
-        actionInProgress.put(botName, false);
-        String completedAction = currentAction.get(botName);
-        currentAction.remove(botName);
-        actionStartTime.remove(botName);
-        if (completedAction != null) {
-            LOGGER.debug("[ACTION] Completed: {}", completedAction);
-        }
+        actionTracker.complete(botName);
     }
 
     public static void waitForActionCompletion(String botName, long timeoutMs) {
-        long start = System.currentTimeMillis();
-        while (isActionInProgress(botName)) {
-            if (System.currentTimeMillis() - start > timeoutMs) {
-                LOGGER.warn("[ACTION] waitForActionCompletion timed out after {}ms", timeoutMs);
-                completeAction(botName);
-                break;
-            }
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
+        actionTracker.waitForCompletion(botName, timeoutMs);
     }
 }
