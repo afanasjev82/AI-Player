@@ -792,7 +792,14 @@ public class BotEventHandler {
                     // Gather state information
                     State currentState = createInitialState(bot);
 
-                    Map<StateActions.Action, Double> riskMap = currentState.getRiskMap();
+                    // Compute the real per-action risk map (mirrors the training
+                    // path). The old code used currentState.getRiskMap(), which
+                    // createInitialState leaves EMPTY — chooseActionPlayMode then
+                    // skipped every Q-table entry and always degraded to STAY
+                    // (the "play-mode RL inert" bug: a trained policy was never
+                    // consulted).
+                    List<StateActions.Action> potentialActions = rlAgentHook.suggestPotentialActions(currentState);
+                    Map<StateActions.Action, Double> riskMap = rlAgentHook.calculateRisk(currentState, potentialActions, bot);
 
                     // Choose action via the trained policy.
                     StateActions.Action chosenAction = rlAgentHook.chooseActionPlayMode(currentState, qTable, riskMap, "detectAndReactPlayMode", transitionHistory);
@@ -816,7 +823,10 @@ public class BotEventHandler {
                     // Gather state information
                     State currentState = createInitialState(bot);
 
-                    Map<StateActions.Action, Double> riskMap = currentState.getRiskMap();
+                    // Same fix as the hostile branch: compute a real risk map so
+                    // the policy can act instead of defaulting to STAY.
+                    List<StateActions.Action> potentialActions = rlAgentHook.suggestPotentialActions(currentState);
+                    Map<StateActions.Action, Double> riskMap = rlAgentHook.calculateRisk(currentState, potentialActions, bot);
 
 
                     // Choose action

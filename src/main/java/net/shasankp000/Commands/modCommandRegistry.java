@@ -1132,7 +1132,13 @@ public class modCommandRegistry {
 
         Vec2 facing = context.getSource().getRotation();
 
-        Vec3 pos = new Vec3(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
+        // Center the bot in its spawn block (+0.5 on X/Z). findSafeSpawn verifies
+        // the ONE block at spawnPos, but a player's 0.6-wide bounding box spans
+        // the block edges — feet at the integer corner (x,y,z) makes the box
+        // overlap up to 4 adjacent blocks, so a bot can suffocate in a wall even
+        // though the scanned block itself was air. Centering keeps the box inside
+        // the verified block.
+        Vec3 pos = new Vec3(spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5);
 
         botName = StringArgumentType.getString(context, "bot_name");
 

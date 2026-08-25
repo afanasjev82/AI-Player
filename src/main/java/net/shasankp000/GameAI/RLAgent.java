@@ -1179,7 +1179,10 @@ public class RLAgent {
             riskMap.put(action, risk);
         }
 
-        System.out.println("Final risk map: " + riskMap);
+        // Debug-level: this runs on the 33ms combat tick in play mode, so an
+        // unconditional println would spam the console (it did — hundreds of
+        // "Final risk map" lines per minute once calculateRisk ran in play mode).
+        LOGGER.debug("Final risk map: {}", riskMap);
 
         return riskMap; // Return the map of actions and their associated risks
 

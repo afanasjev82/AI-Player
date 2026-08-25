@@ -334,6 +334,15 @@ public class AutoFaceEntity {
                         );
                     }
 
+                    // If the bot is actively navigating, skip the combat reaction.
+                    // The fallback attack issues /player attack + look, which cancel
+                    // the move-forward action and strand the bot mid-path (the
+                    // "Attacked X every second, never moves" loop). Navigation
+                    // completes first; combat re-engages once the bot is idle.
+                    if (PathTracer.BotSegmentManager.getBotMovementStatus()) {
+                        return;
+                    }
+
                     if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
 
                         logThreatThrottled("Hostile mobs detected while bot is executing jobs!");

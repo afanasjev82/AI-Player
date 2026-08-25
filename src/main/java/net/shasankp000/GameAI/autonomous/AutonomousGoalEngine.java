@@ -11,6 +11,7 @@ import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.planner.GoalMapper;
 import net.shasankp000.GameAI.planner.HybridPlanner;
 import net.shasankp000.GameAI.planner.SkillExperienceStore;
+import net.shasankp000.PathFinding.PathTracer;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import net.shasankp000.ServiceLLMClients.LLMServiceHandler;
 import org.slf4j.Logger;
@@ -430,6 +431,17 @@ public class AutonomousGoalEngine {
                 // ordinary goals until vanilla wakes the bot.
                 if (sleepController.isBotSleeping()) {
                     Thread.sleep(500);
+                    continue;
+                }
+
+                // Yield while the bot is physically traversing a path (player or
+                // companion navigation). Autonomous goals (build/gather/…)
+                // otherwise fire flushAllMovementTasks() mid-navigation and
+                // abort it. The autonomous loop's OWN navigation is synchronous
+                // inside executeGoal, so this never deadlocks — it only blocks
+                // the *next* goal while a foreign navigation is in flight.
+                if (PathTracer.BotSegmentManager.getBotMovementStatus()) {
+                    Thread.sleep(200);
                     continue;
                 }
 

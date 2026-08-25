@@ -487,9 +487,17 @@ public class PathFinder {
 
 
     private static List<BlockPos> mergePaths(Node forwardNode, Node backwardNode) {
-        List<BlockPos> forwardPath = reconstructPath(forwardNode);
-        List<BlockPos> backwardPath = reconstructPath(backwardNode);
-        backwardPath.remove(0); // Remove duplicate overlap node
+        List<BlockPos> forwardPath = reconstructPath(forwardNode);   // start → … → overlap
+        List<BlockPos> backwardPath = reconstructPath(backwardNode); // target → … → overlap
+        // The overlap node is the *tail* of both reconstructed paths. Remove it
+        // from the backward path (it is already the tail of the forward path),
+        // then reverse so the remainder runs overlap-adjacent → … → target.
+        // The old `remove(0)` dropped the TARGET node instead and left the
+        // overlap duplicated, producing paths that ended one block short of
+        // (and could be mistaken as running away from) the goal.
+        if (!backwardPath.isEmpty()) {
+            backwardPath.remove(backwardPath.size() - 1);
+        }
         Collections.reverse(backwardPath);
         forwardPath.addAll(backwardPath);
 

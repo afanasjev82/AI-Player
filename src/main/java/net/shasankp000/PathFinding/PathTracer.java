@@ -10,8 +10,6 @@ import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -24,43 +22,60 @@ public class PathTracer {
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private static final double WALKING_SPEED = 4.317; // blocks per second
     private static final double SPRINTING_SPEED = 5.612; // blocks per second
-    private static Queue<Segment> segmentQueue = new LinkedList<>();
-    private static boolean shouldSprint;
     private static final int MAX_RETRIES = 5; // Reduced from 10
 
     /**
-     * Extra wall-clock time allowed before stopping, to absorb movement startup
-     * latency and minor speed mismatch. The bot is stopped on a wall-clock
-     * scheduler, but its in-game position advances on game ticks; without this
-     * buffer it consistently stops short of the target and triggers the
-     * "Segment not reached" re-path loop.
+     * Position-driven movement timeout. The bot's actual travel speed is game-
+     * tick driven (and slower under server load), so a fixed wall-clock stop
+     * makes it undershoot the segment and re-path forever. Instead the bot is
+     * kept moving and polled until it arrives, bounded by a distance-scaled
+     * timeout: {@code base + perBlock * blocks}.
      */
-    private static final long MOVEMENT_STARTUP_BUFFER_MS = 150L;
+    private static final long SEGMENT_TIMEOUT_BASE_MS = 5_000L;
+    private static final long SEGMENT_TIMEOUT_PER_BLOCK_MS = 2_500L;
 
     public static class BotSegmentManager {
-        private static final Queue<Segment> jobQueue = new LinkedList<>();
+        /** Most-recently created manager; the static movement-status API reads this. */
+        private static volatile BotSegmentManager ACTIVE = null;
+
+        private final Queue<Segment> jobQueue = new LinkedList<>();
         private final MinecraftServer server;
-        private static CommandSourceStack botSource = null;
+        private final CommandSourceStack botSource;
         private final String botName;
+        private final boolean sprint;
         private int retries = 0;
-        private static boolean isMoving = false;
-        private static Segment currentSegment = null; // Track current segment
+        private boolean isMoving = false;
+        private Segment currentSegment = null; // Track current segment
+        private BlockPos finalDestination = null;
 
         // ✅ Add completion tracking
-        private static CompletableFuture<String> pathCompletionFuture = null;
-        private static final AtomicReference<String> finalResult = new AtomicReference<>("");
+        private CompletableFuture<String> pathCompletionFuture = null;
+        private final AtomicReference<String> finalResult = new AtomicReference<>("");
 
         public static boolean getBotMovementStatus() {
-            return isMoving;
+            BotSegmentManager m = ACTIVE;
+            return m != null && m.isMoving;
+        }
+
+        /** Abandon the currently-active path (if any) and reset its state. */
+        public static void clearActive() {
+            BotSegmentManager m = ACTIVE;
+            if (m != null) m.clearJobs();
         }
 
         public BotSegmentManager(MinecraftServer server, CommandSourceStack botSource, String botName) {
-            this.server = server;
-            BotSegmentManager.botSource = botSource;
-            this.botName = botName;
+            this(server, botSource, botName, true);
         }
 
-        public static void clearJobs() {
+        public BotSegmentManager(MinecraftServer server, CommandSourceStack botSource, String botName, boolean sprint) {
+            this.server = server;
+            this.botSource = botSource;
+            this.botName = botName;
+            this.sprint = sprint;
+            ACTIVE = this;
+        }
+
+        public void clearJobs() {
             jobQueue.clear();
             isMoving = false;
             currentSegment = null;
@@ -76,7 +91,7 @@ public class PathTracer {
         }
 
         // ✅ Add method to get completion future
-        public static CompletableFuture<String> getPathCompletionFuture() {
+        public CompletableFuture<String> getPathCompletionFuture() {
             if (pathCompletionFuture == null) {
                 pathCompletionFuture = new CompletableFuture<>();
             }
@@ -85,6 +100,7 @@ public class PathTracer {
 
         public void addSegmentJob(Segment segment) {
             jobQueue.add(segment);
+            finalDestination = segment.end(); // track the overall target
         }
 
         public void startProcessing() {
@@ -100,9 +116,8 @@ public class PathTracer {
                 isMoving = false;
                 currentSegment = null;
 
-                // if was sprinting previously, set to false.
-                if (shouldSprint) {
-                    shouldSprint = false; // reset the flag
+                // If this path was sprinting, stop sprinting now that it's done.
+                if (sprint) {
                     server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " unsprint");
                 }
 
@@ -117,7 +132,7 @@ public class PathTracer {
             }
         }
 
-        public static Queue<Segment> getJobQueue() {
+        public Queue<Segment> getJobQueue() {
             return jobQueue;
         }
 
@@ -139,42 +154,85 @@ public class PathTracer {
                 return;
             }
 
-            double speed = segment.sprint() ? SPRINTING_SPEED : WALKING_SPEED;
-            double travelTime = roundTo2Decimals(distance / speed);
-            long delayMillis = (long) (travelTime * 1000) + MOVEMENT_STARTUP_BUFFER_MS;
+            // Mark movement active BEFORE issuing the movement command so the
+            // combat/autoface tick (33ms) sees it and skips its own /player
+            // attack+look commands, which would otherwise cancel move-forward.
+            isMoving = true;
 
-            System.out.println("Walking for " + travelTime + " seconds");
-
+            // Start continuous forward movement (plus sprint) and keep it
+            // active until the bot physically reaches the segment end — the
+            // actual speed is game-tick driven, so a fixed wall-clock stop
+            // under load makes the bot stop short and re-path forever.
             modCommandRegistry.moveForward(server, botSource, botName);
-
-            long jumpDelay = Math.max(100, delayMillis - Math.min(200, delayMillis / 2)); // Jump halfway or at least 100ms
-
-            // Schedule jump if required, slightly before reaching the target to ensure proper timing
-            if (segment.jump()) {
-                scheduleAfterActiveDelay(player, jumpDelay, () -> {
-                    server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " jump");
-                    LOGGER.info(botName + " performed a jump!");
-                }); // Jump 200ms before reaching target
-            }
 
             if (segment.sprint()) {
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " sprint");
-            }
-            else {
+            } else {
                 // if was set to sprint before, stop sprinting anyways.
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " unsprint");
             }
 
-            scheduleAfterActiveDelay(player, delayMillis, () -> {
-                modCommandRegistry.stopMoving(server, botSource, botName);
-                LOGGER.info(botName + " has stopped walking!");
-            });
+            // Best-effort jump partway through the segment.
+            if (segment.jump()) {
+                double speed = segment.sprint() ? SPRINTING_SPEED : WALKING_SPEED;
+                long half = Math.max(100L, (long) ((distance / speed) * 1000) / 2);
+                scheduleAfterActiveDelay(player, half, () -> {
+                    server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " jump");
+                    LOGGER.info(botName + " performed a jump!");
+                });
+            }
 
-            isMoving = true;
+            // Poll until the bot arrives (or a distance-scaled timeout), then
+            // stop and delegate to waitForSegmentCompletion for advance/retry.
+            pollSegmentArrival(segment);
+        }
 
-            // Increased delay to allow for movement settling
-            scheduleAfterActiveDelay(player, delayMillis + 100,
-                    () -> waitForSegmentCompletion(segment));
+        /**
+         * Polls the bot's position until it reaches the segment end (or a
+         * distance-scaled timeout elapses), keeping {@code /player move forward}
+         * active the whole time. This replaces the old fixed-duration stop,
+         * which undershot on game-tick-driven movement and triggered the
+         * "Segment not reached" re-path loop.
+         */
+        private void pollSegmentArrival(Segment segment) {
+            int distance = Math.abs(segment.end().getX() - segment.start().getX())
+                    + Math.abs(segment.end().getY() - segment.start().getY())
+                    + Math.abs(segment.end().getZ() - segment.start().getZ());
+            long timeoutMs = SEGMENT_TIMEOUT_BASE_MS + (long) distance * SEGMENT_TIMEOUT_PER_BLOCK_MS;
+            long deadline = System.currentTimeMillis() + timeoutMs;
+
+            Runnable[] poll = new Runnable[1];
+            poll[0] = () -> {
+                ServerPlayer bot = botSource.getPlayer();
+                if (bot == null) {
+                    modCommandRegistry.stopMoving(server, botSource, botName);
+                    isMoving = false;
+                    waitForSegmentCompletion(segment);
+                    return;
+                }
+                if (FoodConsumptionTool.isConsumptionInProgress(bot.getUUID())) {
+                    // Eating pauses movement; wait without advancing the deadline.
+                    scheduler.schedule(poll[0], 100, TimeUnit.MILLISECONDS);
+                    return;
+                }
+                if (hasReachedTarget(bot.blockPosition(), segment.end(), segment)) {
+                    modCommandRegistry.stopMoving(server, botSource, botName);
+                    isMoving = false;
+                    LOGGER.info("{} reached segment target {}", botName, segment.end());
+                    waitForSegmentCompletion(segment);
+                    return;
+                }
+                if (System.currentTimeMillis() >= deadline) {
+                    modCommandRegistry.stopMoving(server, botSource, botName);
+                    isMoving = false;
+                    LOGGER.warn("{} did not reach {} within {}ms — re-pathing",
+                            botName, segment.end(), timeoutMs);
+                    waitForSegmentCompletion(segment);
+                    return;
+                }
+                scheduler.schedule(poll[0], 100, TimeUnit.MILLISECONDS);
+            };
+            scheduler.schedule(poll[0], 100, TimeUnit.MILLISECONDS);
         }
 
         /** Schedules path work by active movement time, excluding eating pauses. */
@@ -278,15 +336,18 @@ public class PathTracer {
                     return;
                 }
 
-                // Clear old segments and create new ones
-                clearJobs();
-                segmentQueue.clear();
+                // Clear old segments and re-add the freshly computed ones.
+                // Do NOT call clearJobs() here: that completes the path future
+                // with "Path cleared", making GoTo return success prematurely
+                // while the re-path is still running. Also keep finalDestination
+                // intact — the re-path targets the same overall destination.
+                jobQueue.clear();
+                currentSegment = null;
 
                 List<PathFinder.PathNode> simplified = PathFinder.simplifyPath(newPath, world);
-                Queue<Segment> newSegments = PathFinder.convertPathToSegments(simplified, shouldSprint);
+                Queue<Segment> newSegments = PathFinder.convertPathToSegments(simplified, sprint);
 
                 LOGGER.info("New path generated with {} segments", newSegments.size());
-                segmentQueue = new LinkedList<>(newSegments);
                 newSegments.forEach(this::addSegmentJob);
 
                 retries = 0; // Reset retries for new path
@@ -306,13 +367,8 @@ public class PathTracer {
         }
 
         private BlockPos getFinalDestination() {
-            if (segmentQueue.isEmpty()) {
-                return currentSegment != null ? currentSegment.end() : null;
-            }
-
-            // Get the last segment's end position
-            Segment lastSegment = ((LinkedList<Segment>) segmentQueue).peekLast();
-            return lastSegment != null ? lastSegment.end() : (currentSegment != null ? currentSegment.end() : null);
+            return finalDestination != null ? finalDestination
+                    : (currentSegment != null ? currentSegment.end() : null);
         }
 
         private boolean isCloseToFinalDestination(BlockPos currentPos, BlockPos finalDestination) {
@@ -333,8 +389,10 @@ public class PathTracer {
                 if (isPositionMatch(currentPos, segment.start()) || isPositionMatch(currentPos, segment.end())) {
                     LOGGER.info("✅ Bot advanced to segment {}: {}", i, segment);
 
-                    // Clear old segments up to this point
-                    clearJobs();
+                    // Clear old segments up to this point (keep the completion
+                    // future pending — we're advancing, not aborting).
+                    jobQueue.clear();
+                    currentSegment = null;
 
                     // Add remaining segments starting from this one
                     for (int j = i; j < remainingSegments.size(); j++) {
@@ -418,12 +476,6 @@ public class PathTracer {
             return Math.abs(current.getX() - target.getX()) + Math.abs(current.getY() - target.getY()) + Math.abs(current.getZ() - target.getZ());
         }
 
-        private double roundTo2Decimals(double value) {
-            BigDecimal bd = BigDecimal.valueOf(value);
-            bd = bd.setScale(2, RoundingMode.HALF_UP);
-            return bd.doubleValue();
-        }
-
         private String lastDirection = "north"; // initialize with something reasonable
 
         private void updateFacing(Segment segment) {
@@ -457,15 +509,14 @@ public class PathTracer {
 
     // ✅ Updated to return CompletableFuture for proper async handling
     public static CompletableFuture<String> tracePath(MinecraftServer server, CommandSourceStack botSource, String botName, Queue<Segment> segments, boolean sprint) {
-        shouldSprint = sprint;
-        segmentQueue = new LinkedList<>(segments); // Create a copy
-
-        // Clear any existing completion future
-        BotSegmentManager.clearJobs();
+        // Abandon any in-flight path from a previous call so per-execution state
+        // (job queue, movement flag, completion future) can't cross-contaminate
+        // when autonomous navigation and player commands interleave.
+        BotSegmentManager.clearActive();
 
         // Create the manager and initialize the completion future FIRST
-        BotSegmentManager manager = new BotSegmentManager(server, botSource, botName);
-        CompletableFuture<String> completionFuture = BotSegmentManager.getPathCompletionFuture();
+        BotSegmentManager manager = new BotSegmentManager(server, botSource, botName, sprint);
+        CompletableFuture<String> completionFuture = manager.getPathCompletionFuture();
 
         // Start the path execution in a separate thread
         new Thread(() -> {
@@ -485,8 +536,7 @@ public class PathTracer {
 
 
     public static void flushAllMovementTasks() {
-        segmentQueue.clear();
-        BotSegmentManager.clearJobs();
+        BotSegmentManager.clearActive();
         LOGGER.info("All movement tasks flushed");
     }
 }
