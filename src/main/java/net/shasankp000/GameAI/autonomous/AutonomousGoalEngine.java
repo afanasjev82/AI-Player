@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -70,6 +71,25 @@ public class AutonomousGoalEngine {
      */
     private static final int UNDERGROUND_SUPPRESS_DEPTH = 5;
 
+    /**
+     * Consecutive failures of a skill before it is backed off (skipped during
+     * re-plans). Breaks the bootstrap deadlock where the LLM re-proposes the
+     * same impossible goal (e.g. "gather wood" with no trees in range) forever.
+     */
+    private static final int MAX_CONSECUTIVE_FAILURES = 3;
+
+    /** How long a backed-off skill stays skipped before it may be retried. */
+    private static final long FAILURE_BACKOFF_MS = 180_000L; // 3 minutes
+
+    /**
+     * Deterministic starter plan used when the LLM fails to return parseable
+     * goals (qwen3 frequently answers with chain-of-thought prose instead of a
+     * JSON array, even with JSON mode requested). Ordered as a survival
+     * bootstrap: gather wood → craft a crafting table → explore for more.
+     */
+    private static final List<String> BOOTSTRAP_GOALS =
+            List.of("gather 16 wood", "craft a crafting table", "explore");
+
     // -------------------------------------------------------------------------
     // State
     // -------------------------------------------------------------------------
@@ -82,6 +102,12 @@ public class AutonomousGoalEngine {
 
     /** Monotonic wall-clock timestamp of the last executed build goal (ms). */
     private volatile long lastBuildGoalExecutedAt = 0L;
+
+    /** Consecutive failures per skill key ("gather:minecraft:oak_log", …). */
+    private final Map<String, Integer> consecutiveFailures = new ConcurrentHashMap<>();
+
+    /** Wall-clock time the skill last crossed the failure threshold. */
+    private final Map<String, Long> lastFailureAt = new ConcurrentHashMap<>();
 
     /**
      * Disk-backed everyday-task outcomes. The skill selector reads this to
@@ -266,8 +292,13 @@ public class AutonomousGoalEngine {
 
             List<String> goals = parseGoalArray(response);
             if (goals.isEmpty()) {
-                LOGGER.warn("[autonomous] Could not parse goal array from: {}", response);
-                return;
+                // Robustness against a non-compliant model: never leave the bot
+                // idle just because the LLM returned prose instead of JSON.
+                // Fall back to a deterministic survival bootstrap so the bot
+                // always has work (also escapes the no-tools bootstrap deadlock).
+                LOGGER.warn("[autonomous] Could not parse goal array ({} chars) — using bootstrap plan",
+                        response.length());
+                goals = BOOTSTRAP_GOALS;
             }
 
             // Skill selector: order goals by observed skill success so proven
@@ -289,6 +320,7 @@ public class AutonomousGoalEngine {
             boolean alreadyDeep = bot != null && depthBelowSurface(bot) > UNDERGROUND_SUPPRESS_DEPTH;
 
             int enqueued = 0;
+            int backedOff = 0;
             for (String goal : ranked) {
                 if (creative && isRedundantInCreative(goal)) {
                     LOGGER.info("[autonomous] Skipping redundant '{}' in creative mode", goal);
@@ -299,9 +331,27 @@ public class AutonomousGoalEngine {
                             goal, depthBelowSurface(bot));
                     continue;
                 }
+                // Failure backoff: a skill that keeps failing must not be
+                // re-enqueued every re-plan — that is the bootstrap deadlock
+                // (e.g. "gather wood" with no trees within search range).
+                String skillKey = HybridPlanner.skillKeyForGoal(GoalMapper.parseGoal(goal), goal);
+                if (isBackedOff(skillKey)) {
+                    backedOff++;
+                    LOGGER.info("[autonomous] Backing off '{}' (skill '{}' failed {}x) — exploring instead",
+                            goal, skillKey, consecutiveFailures.get(skillKey));
+                    continue;
+                }
                 if (enqueue(new GoalQueueEntry(goal.trim(), 0, GoalQueueEntry.Source.LLM_PLAN))) {
                     enqueued++;
                 }
+            }
+            if (enqueued == 0 && backedOff > 0) {
+                // Every LLM-proposed goal keeps failing: escape the local
+                // deadlock by exploring so the bot moves to fresh terrain
+                // (e.g. off a treeless mountain where it can finally gather).
+                enqueue(new GoalQueueEntry("explore", 0, GoalQueueEntry.Source.LLM_PLAN));
+                LOGGER.info("[autonomous] All {} LLM goals backed off — enqueued 'explore' to escape deadlock",
+                        backedOff);
             }
             LOGGER.info("[autonomous] Enqueued {} goals from LLM plan (skill-ranked)", enqueued);
 
@@ -445,16 +495,48 @@ public class AutonomousGoalEngine {
             lastBuildGoalExecutedAt = now;
         }
 
+        String skillKey = HybridPlanner.skillKeyForGoal(goalId, entry.goalText());
+
+        boolean achieved = false;
         try {
             ServerPlayer bot = resolveBot();
             if (bot == null) {
                 LOGGER.warn("[autonomous] Bot '{}' not found on server — skipping goal", botName);
                 return;
             }
-            HybridPlanner.executeGoal(bot, goalId, entry.goalText());
+            achieved = HybridPlanner.executeGoal(bot, goalId, entry.goalText());
         } catch (Exception e) {
             LOGGER.error("[autonomous] HybridPlanner execution failed for '{}': {}", entry.goalText(), e.getMessage());
         }
+
+        recordFailure(entry, skillKey, achieved);
+    }
+
+    /**
+     * Update consecutive-failure tracking for a skill after one attempt.
+     * Only LLM_PLAN goals feed this backoff signal; player/world-event goals
+     * always run regardless.
+     */
+    private void recordFailure(GoalQueueEntry entry, String skillKey, boolean achieved) {
+        if (entry.source() != GoalQueueEntry.Source.LLM_PLAN) return;
+        if (achieved) {
+            consecutiveFailures.remove(skillKey);
+            lastFailureAt.remove(skillKey);
+            return;
+        }
+        int failures = consecutiveFailures.merge(skillKey, 1, Integer::sum);
+        if (failures >= MAX_CONSECUTIVE_FAILURES) {
+            lastFailureAt.put(skillKey, System.currentTimeMillis());
+        }
+    }
+
+    /** True if a skill has repeatedly failed and is still within its cooldown. */
+    private boolean isBackedOff(String skillKey) {
+        Integer failures = consecutiveFailures.get(skillKey);
+        if (failures == null || failures < MAX_CONSECUTIVE_FAILURES) return false;
+        Long last = lastFailureAt.get(skillKey);
+        if (last == null) return false;
+        return (System.currentTimeMillis() - last) < FAILURE_BACKOFF_MS;
     }
 
     // -------------------------------------------------------------------------
@@ -543,7 +625,10 @@ public class AutonomousGoalEngine {
         try {
             LLMClient client = buildClient(provider);
             if (client == null) return null;
-            return client.sendPrompt(systemPrompt, userPrompt);
+            // Goal planning output is machine-parsed, so request structured JSON
+            // where the provider supports it (fixes qwen3 returning chain-of-
+            // thought prose instead of a JSON array).
+            return client.sendPromptJson(systemPrompt, userPrompt);
         } catch (Exception e) {
             LOGGER.error("[autonomous] LLM call failed: {}", e.getMessage());
             return null;
@@ -605,7 +690,9 @@ public class AutonomousGoalEngine {
             return extracted;
         }
 
-        LOGGER.warn("[autonomous] JSON parse error — raw: {}", response);
+        // Log only the length, not the raw chain-of-thought — dumping the full
+        // reasoning into the server log is noisy and useless.
+        LOGGER.warn("[autonomous] JSON parse error — {} chars of unparseable prose", response.length());
         return List.of();
     }
 

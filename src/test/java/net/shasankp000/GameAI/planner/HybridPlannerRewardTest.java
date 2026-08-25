@@ -43,4 +43,22 @@ class HybridPlannerRewardTest {
         assertEquals("craft",
                 HybridPlanner.skillKeyForGoal(GoalMapper.GOAL_CRAFT, "craft a crafting table"));
     }
+
+    @Test
+    void craftAndBuildRequireInventoryChange() {
+        // "Plan executed but nothing happened" (0→0) must NOT count as achieved.
+        assertFalse(HybridPlanner.isAchieved(GoalMapper.GOAL_CRAFT, true, 0));
+        assertFalse(HybridPlanner.isAchieved(GoalMapper.GOAL_BUILD, true, 0));
+        // A real inventory change (inputs consumed / output produced) IS achieved.
+        assertTrue(HybridPlanner.isAchieved(GoalMapper.GOAL_CRAFT, true, -3));
+        assertTrue(HybridPlanner.isAchieved(GoalMapper.GOAL_BUILD, true, -1));
+    }
+
+    @Test
+    void movementAndSocialGoalsAchieveOnExecution() {
+        assertTrue(HybridPlanner.isAchieved(GoalMapper.GOAL_NAVIGATE, true, 0));
+        assertTrue(HybridPlanner.isAchieved(GoalMapper.GOAL_EXPLORE, true, 0));
+        assertTrue(HybridPlanner.isAchieved(GoalMapper.GOAL_COMBAT, true, 0));
+        assertFalse(HybridPlanner.isAchieved(GoalMapper.GOAL_COMBAT, false, 0));
+    }
 }

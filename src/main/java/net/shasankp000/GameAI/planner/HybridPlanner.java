@@ -82,7 +82,13 @@ public class HybridPlanner {
      * @param goalId      Numeric goal identifier from {@link GoalMapper}.
      * @param goalText    Human-readable goal description for plan generation.
      */
-    public static void executeGoal(ServerPlayer bot, short goalId, String goalText) {
+    /**
+     * Execute a mapped goal and report whether it was actually <em>achieved</em>
+     * (a measurable, world-visible outcome happened), as opposed to merely
+     * "the plan ran without throwing". See {@link #recordOutcome} for the
+     * per-goal-type definition of achievement.
+     */
+    public static boolean executeGoal(ServerPlayer bot, short goalId, String goalText) {
         LOGGER.info("[HybridPlanner] executeGoal called -- bot='{}', goalId={}, goal='{}'",
                 bot.getName().getString(), goalId, goalText);
 
@@ -92,7 +98,7 @@ public class HybridPlanner {
         if (currentState == null) {
             LOGGER.warn("[HybridPlanner] Could not obtain State for bot '{}' -- skipping goal '{}'",
                     bot.getName().getString(), goalText);
-            return;
+            return false;
         }
 
         // 1b. Snapshot inventory before execution so we can measure the real
@@ -131,10 +137,10 @@ public class HybridPlanner {
                         goalText);
                 // Record the attempt as failed so unsupported goals (craft/farm/
                 // combat/trade) aren't silently counted as successes.
-                recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, false);
+                recordOutcome(goalId, skillKey, rewardItemKey, bot, inventoryBefore, false);
                 LOGGER.info("[HybridPlanner] Fallback: goal='{}' could not be planned by HybridPlanner; " +
                         "AutonomousGoalEngine should retry or route via LLM.", goalText);
-                return;
+                return false;
             }
 
             // FIX: plan.getSteps() → plan.steps
@@ -150,12 +156,12 @@ public class HybridPlanner {
 
             if (!executed) {
                 LOGGER.warn("[HybridPlanner] Plan execution failed for goal '{}'", goalText);
-                recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, false);
-                return;
+                recordOutcome(goalId, skillKey, rewardItemKey, bot, inventoryBefore, false);
+                return false;
             }
 
             LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);
-            recordOutcome(skillKey, rewardItemKey, bot, inventoryBefore, true);
+            return recordOutcome(goalId, skillKey, rewardItemKey, bot, inventoryBefore, true);
 
         } finally {
             planner.shutdown();
@@ -256,42 +262,80 @@ public class HybridPlanner {
     }
 
     /**
-     * Record the observed outcome of a goal attempt.
+     * Record the observed outcome of a goal attempt, separating <em>action
+     * completed</em> (the plan ran without throwing) from <em>goal achieved</em>
+     * (a measurable, world-visible outcome happened).
      *
-     * <p>For gather/mine the reward is the delta in the <em>target resource</em>
-     * (items gained of the mined block's drop); other goals record a 1.0/-1.0
-     * success signal. This is the learning signal {@code training} mode's
-     * combat Q-table never provided for everyday work.
+     * <p>This distinction is the fix for the "false success" bug: a plan can
+     * execute cleanly while achieving nothing (craft with an empty inventory,
+     * mine stone without a pickaxe, build with no blocks). Counting such runs
+     * as successes poisoned the skill-experience store — every skill looked
+     * ~100% successful and the skill selector had no real signal to rank on.
      *
-     * <p>In <b>creative</b> mode the bot has unlimited resources, so gather/mine
-     * has nothing meaningful to measure (no drops, no scarcity). Those goals are
-     * still recorded as a neutral success so the skill selector doesn't punish
-     * them, but the reward is 0.0 rather than a misleading negative delta.
+     * <p>Semantics:
+     * <ul>
+     *   <li>gather/mine — achieved iff the target drop item actually increased
+     *       (reward = items gained).</li>
+     *   <li>craft/build — achieved iff the inventory changed (something was
+     *       crafted or placed) AND the plan executed.</li>
+     *   <li>navigate/explore/farm/combat/trade — no item signal; achieved iff
+     *       the plan executed.</li>
+     *   <li>creative — unlimited resources, so gather/mine deltas are
+     *       meaningless; reward the decision rather than item gain.</li>
+     * </ul>
      */
-    private static void recordOutcome(String skillKey, String rewardItemKey,
-                                      ServerPlayer bot, int before, boolean success) {
+    private static boolean recordOutcome(short goalId, String skillKey, String rewardItemKey,
+                                      ServerPlayer bot, int before, boolean executed) {
         boolean creative = bot != null
                 && bot.gameMode.getGameModeForPlayer().isCreative();
 
         double reward;
+        boolean achieved;
         int after;
+
         if (creative) {
             // Creative: unlimited resources → gather/mine deltas are meaningless.
             // Reward the *decision* (successful execution) rather than item gain.
             after = countTotalItems(bot);
-            reward = success ? 0.5 : -1.0;
+            achieved = executed;
+            reward = executed ? 0.5 : -1.0;
         } else if (rewardItemKey != null) {
+            // gather/mine: measure the target drop item directly. Success means
+            // the bot actually gained that resource (0→0 means nothing was mined).
             after = countItemQuantity(bot, rewardItemKey);
-            reward = (double) (after - before);
+            int gained = after - before;
+            achieved = gained > 0;
+            reward = gained;
         } else {
             after = countTotalItems(bot);
-            reward = success ? 1.0 : -1.0;
+            achieved = isAchieved(goalId, executed, after - before);
+            reward = achieved ? 1.0 : -1.0;
         }
 
-        skillStore().recordOutcome(skillKey, success, reward);
-        LOGGER.info("[skill] outcome '{}': success={}, reward={} ({} {}→{})",
-                skillKey, success, reward,
+        skillStore().recordOutcome(skillKey, achieved, reward);
+        LOGGER.info("[skill] outcome '{}': achieved={}, reward={} ({} {}→{})",
+                skillKey, achieved, reward,
                 rewardItemKey != null ? rewardItemKey : "items", before, after);
+        return achieved;
+    }
+
+    /**
+     * Whether a goal with no specific drop-item signal (craft/build vs the
+     * movement/social skills) counts as achieved.
+     *
+     * <p>craft/build have an observable inventory effect: inputs are consumed
+     * and an output appears, so the item count changes. If the count is
+     * unchanged (0→0), the plan "succeeded" but nothing actually happened —
+     * that is NOT an achievement. Movement/social skills (navigate/explore/
+     * farm/combat/trade) legitimately produce no inventory change, so they
+     * count as achieved purely on execution.
+     */
+    static boolean isAchieved(short goalId, boolean executed, int itemDelta) {
+        if (!executed) return false;
+        if (goalId == GoalMapper.GOAL_CRAFT || goalId == GoalMapper.GOAL_BUILD) {
+            return itemDelta != 0;
+        }
+        return true;
     }
 
     // -------------------------------------------------------------------------

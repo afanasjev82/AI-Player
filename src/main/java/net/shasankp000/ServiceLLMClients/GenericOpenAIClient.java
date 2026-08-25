@@ -59,6 +59,15 @@ public class GenericOpenAIClient implements LLMClient {
 
     @Override
     public String sendPrompt(String systemPrompt, String userPrompt) {
+        return sendPromptInternal(systemPrompt, userPrompt, false);
+    }
+
+    @Override
+    public String sendPromptJson(String systemPrompt, String userPrompt) {
+        return sendPromptInternal(systemPrompt, userPrompt, true);
+    }
+
+    private String sendPromptInternal(String systemPrompt, String userPrompt, boolean jsonMode) {
         try {
             // Construct the request body for chat completions
             JsonObject requestBody = new JsonObject();
@@ -80,6 +89,18 @@ public class GenericOpenAIClient implements LLMClient {
 
             requestBody.add("messages", messages);
             requestBody.addProperty("max_tokens", 1024);
+
+            if (jsonMode) {
+                // Force structured JSON output. `response_format` is the OpenAI
+                // standard; `format` is Ollama's native field (harmlessly
+                // ignored by other OpenAI-compatible servers). Deterministic
+                // sampling keeps the emitted array parseable.
+                JsonObject responseFormat = new JsonObject();
+                responseFormat.addProperty("type", "json_object");
+                requestBody.add("response_format", responseFormat);
+                requestBody.addProperty("format", "json");
+                requestBody.addProperty("temperature", 0.0);
+            }
 
             HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "chat/completions"))
