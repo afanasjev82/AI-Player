@@ -31,6 +31,7 @@ import net.shasankp000.Database.QTableExporter;
 import net.shasankp000.Entity.*;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.ThreatEvaluator;
 import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.PathFinding.BotStance;
@@ -1652,7 +1653,7 @@ public class modCommandRegistry {
             if (entity instanceof net.minecraft.world.entity.player.Player player) {
                 baseThreat = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.getPlayerThreatLevel(bot, player);
             } else {
-                baseThreat = calculateBaseThreatForEntity(entity, distance);
+                baseThreat = ThreatEvaluator.calculateBaseThreatForEntity(entity, distance);
             }
 
             double distanceModifier = 0.0;
@@ -1711,50 +1712,6 @@ public class modCommandRegistry {
         }
 
         return highestThreatEntity;
-    }
-
-    private static double calculateBaseThreatForEntity(Entity entity, double distance) {
-        String entityType = entity.getName().getString().toLowerCase();
-        double baseThreat = 5.0;
-
-        if (entityType.contains("creeper")) {
-            baseThreat = 50.0;
-            if (distance <= 3.0) baseThreat += 30.0;
-        } else if (entityType.contains("warden")) {
-            baseThreat = 100.0;
-        } else if (entityType.contains("ravager")) {
-            baseThreat = 40.0;
-        } else if (entityType.contains("skeleton") || entityType.contains("stray")) {
-            baseThreat = 20.0;
-        } else if (entityType.contains("witch")) {
-            baseThreat = 25.0;
-        } else if (entityType.contains("blaze")) {
-            baseThreat = 30.0;
-        } else if (entityType.contains("ghast")) {
-            baseThreat = 35.0;
-        } else if (entityType.contains("drowned") && distance > 5.0) {
-            baseThreat = 15.0;
-        } else if (entityType.contains("pillager")) {
-            baseThreat = 18.0;
-        } else if (entityType.contains("phantom")) {
-            baseThreat = 22.0;
-        } else if (entityType.contains("zombie") || entityType.contains("husk")) {
-            baseThreat = 8.0;
-        } else if (entityType.contains("spider") || entityType.contains("cave_spider")) {
-            baseThreat = 12.0;
-        } else if (entityType.contains("enderman")) {
-            baseThreat = 15.0;
-        } else if (entityType.contains("vindicator")) {
-            baseThreat = 25.0;
-        } else if (entityType.contains("piglin")) {
-            baseThreat = 10.0;
-        } else if (entityType.contains("slime") || entityType.contains("magma_cube")) {
-            baseThreat = 6.0;
-        } else if (entityType.contains("silverfish")) {
-            baseThreat = 4.0;
-        }
-
-        return baseThreat;
     }
 
     private static String getTargetSelectionReason(Entity entity, double distance) {
