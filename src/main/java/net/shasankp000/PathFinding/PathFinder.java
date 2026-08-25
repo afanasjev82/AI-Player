@@ -456,7 +456,11 @@ public class PathFinder {
 
     private static boolean isPassable(ServerLevel world, BlockPos pos) {
         BlockState blockState = world.getBlockState(pos);
-        return blockState.isAir() || blockState.is(Blocks.WATER) || !blockState.getCollisionShape(world, pos).isEmpty();
+        // A block is passable if it is air, water, or has NO collision shape
+        // (flowers, grass, torches, signs, …). The old `!…isEmpty()` inverted
+        // this: it treated solid blocks as passable (letting the pathfinder
+        // route through walls) and walk-through blocks as obstacles.
+        return blockState.isAir() || blockState.is(Blocks.WATER) || blockState.getCollisionShape(world, pos).isEmpty();
     }
 
 

@@ -28,6 +28,15 @@ public class PathTracer {
     private static boolean shouldSprint;
     private static final int MAX_RETRIES = 5; // Reduced from 10
 
+    /**
+     * Extra wall-clock time allowed before stopping, to absorb movement startup
+     * latency and minor speed mismatch. The bot is stopped on a wall-clock
+     * scheduler, but its in-game position advances on game ticks; without this
+     * buffer it consistently stops short of the target and triggers the
+     * "Segment not reached" re-path loop.
+     */
+    private static final long MOVEMENT_STARTUP_BUFFER_MS = 150L;
+
     public static class BotSegmentManager {
         private static final Queue<Segment> jobQueue = new LinkedList<>();
         private final MinecraftServer server;
@@ -132,7 +141,7 @@ public class PathTracer {
 
             double speed = segment.sprint() ? SPRINTING_SPEED : WALKING_SPEED;
             double travelTime = roundTo2Decimals(distance / speed);
-            long delayMillis = (long) (travelTime * 1000);
+            long delayMillis = (long) (travelTime * 1000) + MOVEMENT_STARTUP_BUFFER_MS;
 
             System.out.println("Walking for " + travelTime + " seconds");
 
@@ -386,8 +395,12 @@ public class PathTracer {
             boolean reached = dx <= horizontalTolerance && dz <= horizontalTolerance && dy <= verticalTolerance;
 
             if (reached) {
-                LOGGER.info("Target reached! dx={:.2f}, dy={:.2f}, dz={:.2f} (tolerance: h={}, v={})",
-                        dx, dy, dz, horizontalTolerance, verticalTolerance);
+                // SLF4J uses `{}` placeholders, not Python-style `{:.2f}` — the
+                // latter produced the "found 2 placeholders, provided 5" warning.
+                LOGGER.info("Target reached! dx={}, dy={}, dz={} (tolerance: h={}, v={})",
+                        String.format("%.2f", dx), String.format("%.2f", dy),
+                        String.format("%.2f", dz),
+                        horizontalTolerance, verticalTolerance);
             }
 
             return reached;
