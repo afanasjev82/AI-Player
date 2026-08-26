@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
@@ -75,9 +76,13 @@ public class SearchBlocks {
 
         // Normalize block type
         String normalizedBlockType = normalizeBlockType(blockType);
-        Block targetBlock = getBlockFromIdentifier(normalizedBlockType);
 
-        if (targetBlock == null) {
+        // Build the block matcher. The ANY_LOG sentinel ("minecraft:*_log")
+        // matches any log species so "gather wood" works in any biome; all
+        // other types match one exact block.
+        Predicate<BlockState> matcher = matcherFor(normalizedBlockType);
+
+        if (matcher == null) {
             LOGGER.error("Unknown block type: {}", normalizedBlockType);
             return null;
         }
@@ -96,7 +101,7 @@ public class SearchBlocks {
 
             // Use parallel search for this shell
             BlockPos result = searchShell(
-                world, botPos, targetBlock, prevRadius, finalRadius, searched
+                world, botPos, matcher, prevRadius, finalRadius, searched
             );
 
             if (result != null) {
@@ -119,7 +124,7 @@ public class SearchBlocks {
     private static BlockPos searchShell(
             ServerLevel world,
             BlockPos center,
-            Block targetBlock,
+            Predicate<BlockState> matcher,
             int innerRadius,
             int outerRadius,
             Set<BlockPos> alreadySearched
@@ -158,7 +163,7 @@ public class SearchBlocks {
                     alreadySearched.add(pos); // Mark as searched
 
                     BlockState state = world.getBlockState(pos);
-                    if (state.getBlock() == targetBlock) {
+                    if (matcher.test(state)) {
                         return pos; // Found it!
                     }
                 }
@@ -226,6 +231,27 @@ public class SearchBlocks {
         }
 
         return input;
+    }
+
+    /**
+     * Builds the block matcher for a normalized block type. The sentinel
+     * {@code "*_log"} (e.g. {@code "minecraft:*_log"}) matches any log species;
+     * everything else matches one exact block. Returns {@code null} for an
+     * unknown block type.
+     */
+    private static Predicate<BlockState> matcherFor(String normalizedBlockType) {
+        if (normalizedBlockType.endsWith("*_log")) {
+            return state -> isLogBlock(state.getBlock());
+        }
+        Block target = getBlockFromIdentifier(normalizedBlockType);
+        if (target == null) return null;
+        return state -> state.getBlock() == target;
+    }
+
+    /** Whether a block is a tree-trunk log of any overworld species. */
+    private static boolean isLogBlock(Block block) {
+        Identifier key = BuiltInRegistries.BLOCK.getKey(block);
+        return key != null && key.getPath().endsWith("_log");
     }
 
     /**

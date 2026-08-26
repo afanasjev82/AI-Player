@@ -199,8 +199,19 @@ public class SkillPlanBuilder {
     /** Map natural-language block references to a Minecraft block identifier. */
     static String inferBlockType(String goalText) {
         String lower = goalText.toLowerCase();
-        if (lower.contains("wood") || lower.contains("log") || lower.contains("tree") || lower.contains("oak")) {
-            return "minecraft:oak_log";
+        // Specific wood species first; a generic "wood"/"log"/"tree" reference
+        // maps to the ANY_LOG sentinel so gathering works in any biome (jungle,
+        // taiga, …) rather than only oak forests.
+        if (lower.contains("dark oak")) return "minecraft:dark_oak_log";
+        if (lower.contains("birch"))    return "minecraft:birch_log";
+        if (lower.contains("spruce"))   return "minecraft:spruce_log";
+        if (lower.contains("jungle"))   return "minecraft:jungle_log";
+        if (lower.contains("acacia"))   return "minecraft:acacia_log";
+        if (lower.contains("mangrove")) return "minecraft:mangrove_log";
+        if (lower.contains("cherry"))   return "minecraft:cherry_log";
+        if (lower.contains("oak"))      return "minecraft:oak_log";
+        if (lower.contains("wood") || lower.contains("log") || lower.contains("tree")) {
+            return EntityExtractor.ANY_LOG;
         }
         if (lower.contains("cobble") || lower.contains("stone") || lower.contains("rock")) {
             return "minecraft:stone";

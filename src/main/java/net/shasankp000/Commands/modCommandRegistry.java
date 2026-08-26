@@ -1122,6 +1122,26 @@ public class modCommandRegistry {
     }
 
 
+    /**
+     * Gives the freshly-spawned bot a minimal survival starter kit so it is not
+     * defenceless or unable to gather: a wooden sword (melee), a wooden pickaxe
+     * (stone/ore) and a wooden axe (wood). Without this the bot spawns empty-
+     * handed and combat correctly evades ("Unarmed — evasion is smart choice"),
+     * which is what prompted the "Paul has no melee weapons" report.
+     */
+    private static void giveStarterKit(ServerPlayer bot) {
+        try {
+            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_SWORD));
+            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_PICKAXE));
+            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_AXE));
+            bot.getInventory().setChanged();
+            bot.containerMenu.broadcastChanges();
+            LOGGER.info("Gave starter kit to {}", bot.getName().getString());
+        } catch (Exception e) {
+            LOGGER.warn("Failed to give starter kit to {}: {}", bot.getName().getString(), e.getMessage());
+        }
+    }
+
     private static void spawnBot(CommandContext<CommandSourceStack> context, String spawnMode) {
         LOGGER.info("========== SPAWNING BOT IN MODE: {} ==========", spawnMode);
 
@@ -1183,6 +1203,8 @@ public class modCommandRegistry {
 
                 Objects.requireNonNull(bot.getAttribute(Attributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
+                giveStarterKit(bot);
+
                 RespawnHandler.registerRespawnListener(bot);
 
                 AutoFaceEntity.startAutoFace(bot);
@@ -1219,6 +1241,8 @@ public class modCommandRegistry {
                 BotEventHandler.setActiveBot(server, bot);
 
                 Objects.requireNonNull(bot.getAttribute(Attributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
+
+                giveStarterKit(bot);
 
                 System.out.println("Registering respawn listener....");
 

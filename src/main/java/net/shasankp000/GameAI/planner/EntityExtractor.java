@@ -22,6 +22,13 @@ public class EntityExtractor {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("EntityExtractor");
 
+    /**
+     * Sentinel block type meaning "any log" (oak/spruce/birch/jungle/acacia/
+     * dark_oak/mangrove/cherry). Used when a goal references wood generically
+     * ("gather wood") without naming a species, so the search is biome-agnostic.
+     */
+    public static final String ANY_LOG = "minecraft:*_log";
+
     // ── Block alias dictionary ────────────────────────────────────────────────
     private static final Map<String, String> BLOCK_ALIASES = new HashMap<>();
 
@@ -30,9 +37,9 @@ public class EntityExtractor {
         BLOCK_ALIASES.put("oak",          "minecraft:oak_log");
         BLOCK_ALIASES.put("oak log",      "minecraft:oak_log");
         BLOCK_ALIASES.put("oak wood",     "minecraft:oak_log");
-        BLOCK_ALIASES.put("wood",         "minecraft:oak_log");
-        BLOCK_ALIASES.put("log",          "minecraft:oak_log");
-        BLOCK_ALIASES.put("logs",         "minecraft:oak_log");
+        BLOCK_ALIASES.put("wood",         ANY_LOG);
+        BLOCK_ALIASES.put("log",          ANY_LOG);
+        BLOCK_ALIASES.put("logs",         ANY_LOG);
         BLOCK_ALIASES.put("birch",        "minecraft:birch_log");
         BLOCK_ALIASES.put("spruce",       "minecraft:spruce_log");
         BLOCK_ALIASES.put("jungle",       "minecraft:jungle_log");

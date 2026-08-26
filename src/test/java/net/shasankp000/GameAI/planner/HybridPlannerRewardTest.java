@@ -36,12 +36,20 @@ class HybridPlannerRewardTest {
 
     @Test
     void skillKeyIncludesTargetForGatherAndMine() {
-        assertEquals("gather:minecraft:oak_log",
+        assertEquals("gather:" + EntityExtractor.ANY_LOG,
                 HybridPlanner.skillKeyForGoal(GoalMapper.GOAL_GATHER, "gather 32 wood"));
         assertEquals("mine:minecraft:stone",
                 HybridPlanner.skillKeyForGoal(GoalMapper.GOAL_MINE, "mine 16 stone"));
         assertEquals("craft",
                 HybridPlanner.skillKeyForGoal(GoalMapper.GOAL_CRAFT, "craft a crafting table"));
+    }
+
+    @Test
+    void craftOutputItemKeyMapsGoalToProducedItem() {
+        assertEquals("minecraft:crafting_table", HybridPlanner.craftOutputItemKey("craft a crafting table"));
+        assertEquals("minecraft:wooden_sword", HybridPlanner.craftOutputItemKey("craft a wooden sword"));
+        assertEquals("minecraft:torch", HybridPlanner.craftOutputItemKey("craft 4 torches"));
+        assertNull(HybridPlanner.craftOutputItemKey("craft planks"));
     }
 
     @Test

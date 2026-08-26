@@ -211,12 +211,17 @@ public class HybridPlanner {
 
     /** Count of a specific item id (by registry key) in the bot's inventory. */
     private static int countItemQuantity(ServerPlayer bot, String itemKey) {
+        // The ANY_LOG sentinel measures "any log gained", so generic "gather
+        // wood" rewards correctly regardless of the species actually found.
+        boolean anyLog = EntityExtractor.ANY_LOG.equals(itemKey);
         int total = 0;
         for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
             var stack = bot.getInventory().getItem(i);
             if (stack.isEmpty()) continue;
             var id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
-            if (id != null && id.toString().equals(itemKey)) total += stack.getCount();
+            if (id == null) continue;
+            boolean match = anyLog ? id.getPath().endsWith("_log") : id.toString().equals(itemKey);
+            if (match) total += stack.getCount();
         }
         return total;
     }
@@ -258,7 +263,38 @@ public class HybridPlanner {
         if (goalId == GoalMapper.GOAL_GATHER || goalId == GoalMapper.GOAL_MINE) {
             return blockTypeToDropItem(SkillPlanBuilder.inferBlockType(goalText));
         }
+        if (goalId == GoalMapper.GOAL_CRAFT) {
+            return craftOutputItemKey(goalText);
+        }
         return null;
+    }
+
+    /**
+     * The concrete item a craft goal produces, used as its reward signal so a
+     * successful craft (log → planks → table) is measured by the output item
+     * appearing rather than by total item count (which is blind to 1:1 type
+     * swaps, e.g. one log consumed for one table produced). Returns {@code null}
+     * when the output can't be determined, falling back to total-item counting.
+     */
+    static String craftOutputItemKey(String goalText) {
+        String item = SkillPlanBuilder.inferCraftItem(goalText);
+        return switch (item) {
+            case "crafting table", "workbench" -> "minecraft:crafting_table";
+            case "stick", "sticks"           -> "minecraft:stick";
+            case "torch"                     -> "minecraft:torch";
+            case "wooden pickaxe"            -> "minecraft:wooden_pickaxe";
+            case "wooden axe"                -> "minecraft:wooden_axe";
+            case "wooden sword"              -> "minecraft:wooden_sword";
+            case "wooden shovel"             -> "minecraft:wooden_shovel";
+            case "wooden hoe"                -> "minecraft:wooden_hoe";
+            case "stone pickaxe"             -> "minecraft:stone_pickaxe";
+            case "stone axe"                 -> "minecraft:stone_axe";
+            case "stone sword"               -> "minecraft:stone_sword";
+            case "furnace"                   -> "minecraft:furnace";
+            case "chest"                     -> "minecraft:chest";
+            // "planks" (species-ambiguous) and unmapped items fall back.
+            default                          -> null;
+        };
     }
 
     /**

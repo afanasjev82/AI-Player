@@ -55,10 +55,20 @@ class SkillPlanBuilderTest {
 
     @Test
     void gatherInfersWoodBlockType() {
-        assertEquals("minecraft:oak_log", SkillPlanBuilder.inferBlockType("gather wood"));
+        assertEquals(EntityExtractor.ANY_LOG, SkillPlanBuilder.inferBlockType("gather wood"));
         assertEquals("minecraft:stone", SkillPlanBuilder.inferBlockType("mine stone"));
         assertEquals("minecraft:iron_ore", SkillPlanBuilder.inferBlockType("gather iron"));
         assertEquals("minecraft:coal_ore", SkillPlanBuilder.inferBlockType("get coal"));
+    }
+
+    @Test
+    void genericWoodMapsToAnyLogButSpecificSpeciesStaySpecific() {
+        assertEquals(EntityExtractor.ANY_LOG, SkillPlanBuilder.inferBlockType("gather wood"));
+        assertEquals(EntityExtractor.ANY_LOG, SkillPlanBuilder.inferBlockType("chop some logs"));
+        assertEquals("minecraft:oak_log", SkillPlanBuilder.inferBlockType("gather oak wood"));
+        assertEquals("minecraft:jungle_log", SkillPlanBuilder.inferBlockType("gather jungle wood"));
+        assertEquals("minecraft:dark_oak_log", SkillPlanBuilder.inferBlockType("gather dark oak"));
+        assertEquals("minecraft:birch_log", SkillPlanBuilder.inferBlockType("gather birch"));
     }
 
     @Test
