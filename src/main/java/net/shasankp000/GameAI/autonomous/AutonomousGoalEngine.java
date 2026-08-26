@@ -768,10 +768,30 @@ public class AutonomousGoalEngine {
                 .matcher(response);
         while (m.find()) {
             String s = m.group(1).trim();
-            if (!s.isEmpty() && s.length() < 200) {
+            if (isPlausibleGoal(s)) {
                 out.add(s);
             }
         }
         return out;
+    }
+
+    /**
+     * Whether a bare quoted string looks like a real goal rather than prose
+     * punctuation. The local model (qwen3) pads its reasoning with quoted
+     * punctuation ("," and ":") and quoted single words; without a filter those
+     * flow into {@link GoalMapper#parseGoal} and each one blocks the goal loop
+     * for a full edge-LLM timeout. A plausible goal is short-ish and contains
+     * at least one letter.
+     */
+    private static boolean isPlausibleGoal(String s) {
+        if (s.isEmpty() || s.length() > 200) return false;
+        boolean hasLetter = false;
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isLetter(s.charAt(i))) {
+                hasLetter = true;
+                break;
+            }
+        }
+        return hasLetter;
     }
 }

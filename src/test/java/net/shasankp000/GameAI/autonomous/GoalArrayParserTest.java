@@ -53,6 +53,17 @@ class GoalArrayParserTest {
     }
 
     @Test
+    void ignoresQuotedPunctuationInProse() {
+        // qwen3 pads its reasoning with quoted punctuation ("," and ":") and
+        // quoted single words. Those must not surface as goals — each one would
+        // otherwise trigger a 3s edge-LLM classification timeout in the loop.
+        String prose = "Let me think: \",\" \":\" \"then\" \",\" \"finally\" "
+                + "\"find a safe place to sleep\" \":\"";
+        List<String> goals = AutonomousGoalEngine.parseGoalArray(prose);
+        assertEquals(List.of("then", "finally", "find a safe place to sleep"), goals);
+    }
+
+    @Test
     void creativeModeMarksGatherMineCraftRedundant() {
         assertTrue(AutonomousGoalEngine.isRedundantInCreative("gather 32 wood"));
         assertTrue(AutonomousGoalEngine.isRedundantInCreative("mine 16 stone"));
