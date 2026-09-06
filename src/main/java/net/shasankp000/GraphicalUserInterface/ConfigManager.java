@@ -1,7 +1,5 @@
 package net.shasankp000.GraphicalUserInterface;
 
-import net.fabricmc.api.EnvType;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -9,7 +7,6 @@ import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.shasankp000.AIPlayer;
-import net.shasankp000.AIPlayerClient;
 import net.shasankp000.GraphicalUserInterface.Widgets.DropdownMenuWidget;
 import net.shasankp000.Network.configNetworkManager;
 import org.slf4j.Logger;
@@ -35,20 +32,10 @@ public class ConfigManager extends Screen {
 
     @Override
     protected void init() {
-        // added this line so that the models will load immediately after the API key has been entered and saved into the json.
-        LOGGER.info("Refreshing model list from provider...");
-        AIPlayer.CONFIG.updateModels();
-
-        if (FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT)) {
-            AIPlayerClient.CONFIG.updateModels();
-        }
-
-        if (FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT)) {
-            allModels = AIPlayerClient.CONFIG.getModelList();
-        } else {
-            allModels = AIPlayer.CONFIG.getModelList();
-        }
-        LOGGER.info("Fetched {} models from provider on frontend.", allModels.size());
+        // Show the cached list immediately, then replace it when the asynchronous
+        // provider refresh completes.
+        allModels = new ArrayList<>(AIPlayer.CONFIG.getModelList());
+        LOGGER.info("Loaded {} cached models on frontend.", allModels.size());
         filteredModels = new ArrayList<>(allModels);
 
         int centerX = this.width / 2;
@@ -89,6 +76,8 @@ public class ConfigManager extends Screen {
         this.addRenderableWidget(Button.builder(Component.nullToEmpty("Close"), (btn1) -> this.onClose()).bounds(buttonsStartX + buttonSpacing * 4, buttonY, buttonWidth, fieldHeight).build());
 
         this.addRenderableWidget(dropdownMenuWidget);
+
+        refreshModels(false);
     }
 
     @Override
@@ -127,20 +116,45 @@ public class ConfigManager extends Screen {
     }
 
     private void reloadModels() {
-        LOGGER.info("Reloading model list from provider...");
-        AIPlayer.CONFIG.updateModels();
-        if (FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT)) {
-            AIPlayerClient.CONFIG.updateModels();
-            allModels = AIPlayerClient.CONFIG.getModelList();
-        } else {
-            allModels = AIPlayer.CONFIG.getModelList();
-        }
-        filteredModels = new ArrayList<>(allModels);
-        dropdownMenuWidget.updateOptions(filteredModels);
-        
-        if (this.minecraft != null) {
-            this.minecraft.gui.toastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Models Reloaded"), Component.nullToEmpty("Found " + allModels.size() + " models")));
-        }
+        refreshModels(true);
+    }
+
+    private void refreshModels(boolean showToast) {
+        LOGGER.info("Refreshing model list from provider...");
+        AIPlayer.CONFIG.updateModels().whenComplete((models, error) -> {
+            if (this.minecraft == null) {
+                return;
+            }
+
+            this.minecraft.execute(() -> {
+                // Do not mutate widgets after the user has left this screen.
+                if (this.minecraft == null || this.minecraft.gui.screen() != this) {
+                    return;
+                }
+
+                if (error != null) {
+                    LOGGER.error("Failed to refresh model list", error);
+                    if (showToast) {
+                        this.minecraft.gui.toastManager().addToast(new SystemToast(
+                                SystemToast.SystemToastId.NARRATOR_TOGGLE,
+                                Component.nullToEmpty("Model Refresh Failed"),
+                                Component.nullToEmpty(error.getMessage())));
+                    }
+                    return;
+                }
+
+                allModels = models != null ? new ArrayList<>(models) : new ArrayList<>();
+                onSearchChanged(searchField.getValue());
+                LOGGER.info("Fetched {} models from provider on frontend.", allModels.size());
+
+                if (showToast) {
+                    this.minecraft.gui.toastManager().addToast(new SystemToast(
+                            SystemToast.SystemToastId.NARRATOR_TOGGLE,
+                            Component.nullToEmpty("Models Reloaded"),
+                            Component.nullToEmpty("Found " + allModels.size() + " models")));
+                }
+            });
+        });
     }
 
     private void saveToFile() {

@@ -153,6 +153,8 @@ Set the system property(JVM argument) when launching the game:
 4. If you still don't see the list of models, close the config manager, type `/configMan` again and you should see the list of models available.
 5. Ollama is not required. AI Player connects directly to the configured provider endpoint.
 
+AI-Player uses Chat Completions first for a base URL and automatically retries the Responses API when the provider or selected model does not support Chat Completions. To prefer the Responses API immediately, enter the full endpoint (for example, `https://api.openai.com/v1/responses`).
+
 ### 3. Select a Model
 
 The system will automatically fetch available models from your provider's `/models` endpoint and display them in the model selection interface.
@@ -222,9 +224,10 @@ instead.
 The custom provider implementation uses the following OpenAI API endpoints:
 
 - `GET /models` - For fetching available models
-- `POST /chat/completions` - For sending chat completion requests
+- `POST /chat/completions` - For Chat Completions requests
+- `POST /responses` - For Responses API requests
 
-Your provider must support these endpoints with the same request/response format as OpenAI's API.
+The provider must implement `GET /models` and at least one of the two generation endpoints using the corresponding OpenAI request and response format. AI-Player automatically falls back between the generation endpoints for endpoint/model compatibility errors and remembers the working endpoint for that model.
 
 ## Troubleshooting
 

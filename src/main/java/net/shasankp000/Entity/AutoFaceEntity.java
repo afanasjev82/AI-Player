@@ -23,7 +23,8 @@ import net.shasankp000.PlayerUtils.PredictiveThreatDetector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.shasankp000.DangerZoneDetector.DangerZoneDetector;
-import net.shasankp000.PathFinding.PathTracer;
+import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 
 import java.io.IOException;
 import java.util.Comparator;
@@ -272,6 +273,7 @@ public class AutoFaceEntity {
                 // ===== END PRIORITY: PROJECTILE DEFENSE =====
 
                 if (!hostileEntities.isEmpty()) {
+                    NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
                     botBusy = true;
 
                     // Report all hostile entities to debug manager
@@ -339,11 +341,11 @@ public class AutoFaceEntity {
                     // the move-forward action and strand the bot mid-path (the
                     // "Attacked X every second, never moves" loop). Navigation
                     // completes first; combat re-engages once the bot is idle.
-                    if (PathTracer.BotSegmentManager.getBotMovementStatus()) {
+                    if (NavigationService.isNavigating(bot.getUUID())) {
                         return;
                     }
 
-                    if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
+                    if ((NavigationService.isNavigating(bot.getUUID()) || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
 
                         logThreatThrottled("Hostile mobs detected while bot is executing jobs!");
 
@@ -459,6 +461,7 @@ public class AutoFaceEntity {
 
                 }
                 else if ((DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10) <= 5 && DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10)!= 0) || hasSculkNearby)  {
+                    NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
 
                     System.out.println("Triggering handler for danger zone case");
                     isBotMoving = false;
@@ -487,7 +490,7 @@ public class AutoFaceEntity {
                     // first check if bot is moving, and if so, then stop moving.
                     // the hope is that the bot will stop moving ahead of time since the danger zone detector has a wide range.
 
-                    if (PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving || isBotExecutingTask()) {
+                    if (NavigationService.isNavigating(bot.getUUID()) || isBotMoving || isBotExecutingTask()) {
 
                         System.out.println("Stopping movement since danger zone is detected.");
 
@@ -532,6 +535,7 @@ public class AutoFaceEntity {
 
                 else {
                     // No hostile entities detected - bot is safe
+                    NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
 
                     // Reset threat message flag when out of danger
                     threatMessageSent = false;
@@ -559,13 +563,13 @@ public class AutoFaceEntity {
 
                     // Safe nighttime has no combat trigger, so explicitly let the
                     // learned policy evaluate its SLEEP action while the bot is idle.
-                    if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving)
+                    if (!((NavigationService.isNavigating(bot.getUUID()) || isBotMoving)
                             || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
                         BotEventHandler.considerNightSleep(finalRlAgent, qTable, bot);
                     }
 
                     // Face nearby entities (players, passive mobs, etc.) - but only if bot is NOT busy with tasks
-                    if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
+                    if (!((NavigationService.isNavigating(bot.getUUID()) || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
                         FaceClosestEntity.faceClosestEntity(bot, nearbyEntities);
 
                         // Feature 5 — Player Proximity Awareness.
@@ -989,6 +993,7 @@ public class AutoFaceEntity {
     }
 
     public static void stopAutoFace(ServerPlayer bot) {
+        NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
         ScheduledExecutorService executor = botExecutors.remove(bot);
         if (executor != null && !executor.isShutdown()) {
             executor.shutdownNow();

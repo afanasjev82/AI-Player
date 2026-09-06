@@ -18,6 +18,8 @@ Set the system property when launching the game:
    - **Custom API URL**: The base URL of your provider (e.g., `https://openrouter.ai/api/v1`)
    - **Custom API Key**: Your API key for the provider
 
+AI-Player uses Chat Completions first for a base URL and automatically retries the Responses API when the provider or selected model does not support Chat Completions. To prefer the Responses API immediately, enter the full endpoint (for example, `https://api.openai.com/v1/responses`).
+
 ### 3. Select a Model
 
 The system will automatically fetch available models from your provider's `/models` endpoint and display them in the model selection interface.
@@ -37,9 +39,10 @@ Any provider that implements the OpenAI API standard should work. Some examples:
 The custom provider implementation uses the following OpenAI API endpoints:
 
 - `GET /models` - For fetching available models
-- `POST /chat/completions` - For sending chat completion requests
+- `POST /chat/completions` - For Chat Completions requests
+- `POST /responses` - For Responses API requests
 
-Your provider must support these endpoints with the same request/response format as OpenAI's API.
+The provider must implement `GET /models` and at least one of the two generation endpoints using the corresponding OpenAI request and response format. AI-Player automatically falls back between the generation endpoints for endpoint/model compatibility errors and remembers the working endpoint for that model.
 
 ## Troubleshooting
 
