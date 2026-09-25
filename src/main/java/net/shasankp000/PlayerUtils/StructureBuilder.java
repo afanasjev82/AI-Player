@@ -5,6 +5,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.PathFinding.GoTo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +80,11 @@ public final class StructureBuilder {
      * nearby flat site, navigate there, and retry. Falls back to a smaller
      * structure when even a new site won't work. Deterministic — no LLM in the
      * loop — so it is fast and never blocks on a slow/timing-out model.
+     *
+     * <p>Recovery progress is reported to in-game chat so a watching player can
+     * follow along. When the optional LLM build verifier is enabled
+     * ({@code -Daiplayer.llmBuildVerifier=true}), a single LLM consultation is
+     * used as the final word before giving up.
      */
     public static CompletableFuture<String> buildWithRecovery(ServerPlayer bot, String structureName,
                                                               String blockType) {
@@ -87,9 +93,11 @@ public final class StructureBuilder {
                 if (bot == null || !bot.isAlive() || bot.hasDisconnected()) {
                     return "❌ Bot is unavailable.";
                 }
+                say(bot, "🔨 Building a " + structureName + "…");
                 String result = doBuildAt(bot, structureName, blockType, bot.blockPosition());
                 if (result.startsWith("✅")) return result;
 
+                say(bot, "❌ Couldn't build here — searching for a flatter spot nearby…");
                 LOGGER.warn("Build failed at current site ({}); searching for a flat site nearby", result);
                 int[] dims = dimensions(structureName);
                 if (dims == null) return result;
@@ -107,6 +115,7 @@ public final class StructureBuilder {
                         LOGGER.warn("Navigation to site {} failed: {}", site, nav);
                         continue;
                     }
+                    say(bot, "🚶 Found a better spot — building there…");
                     result = doBuildAt(bot, structureName, blockType, bot.blockPosition());
                     if (result.startsWith("✅")) {
                         return result + " (relocated)";
@@ -116,9 +125,29 @@ public final class StructureBuilder {
                 // Fallback: build a smaller structure in place.
                 String smaller = smallerStructure(structureName);
                 if (smaller != null) {
+                    say(bot, "🏠 Building a smaller " + smaller + " instead…");
                     LOGGER.warn("Falling back from {} to {}", structureName, smaller);
                     result = doBuildAt(bot, smaller, blockType, bot.blockPosition());
                     if (result.startsWith("✅")) return result + " (built " + smaller + " instead)";
+                }
+
+                // LLM-in-the-loop experiment (opt-in): one final consultation.
+                if (BuildVerifier.isEnabled()) {
+                    BuildVerifier.Advice advice = BuildVerifier.consult(structureName, blockType, result);
+                    say(bot, "🤖 Asking the LLM what to try next…");
+                    switch (advice) {
+                        case SMALLER -> {
+                            if (smaller != null) {
+                                String r2 = doBuildAt(bot, smaller, blockType, bot.blockPosition());
+                                if (r2.startsWith("✅")) return r2 + " (LLM suggested " + smaller + ")";
+                            }
+                        }
+                        case RETRY, DIFFERENT_BLOCK -> {
+                            String r2 = doBuildAt(bot, structureName, blockType, bot.blockPosition());
+                            if (r2.startsWith("✅")) return r2 + " (LLM suggested retry)";
+                        }
+                        case GIVE_UP -> { /* fall through and report the failure */ }
+                    }
                 }
                 return result;
             } catch (Exception e) {
@@ -126,6 +155,17 @@ public final class StructureBuilder {
                 return "❌ Build failed: " + e.getMessage();
             }
         });
+    }
+
+    /** Send a message from the bot to in-game chat (best-effort, never throws). */
+    private static void say(ServerPlayer bot, String message) {
+        try {
+            ChatUtils.sendChatMessages(bot.createCommandSourceStack().withSuppressedOutput()
+                    .withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS),
+                    message, false);
+        } catch (Exception e) {
+            LOGGER.warn("Failed to send build progress message: {}", e.getMessage());
+        }
     }
 
     /** Clear (terraform) the footprint of a structure at the bot's site, without building. */
