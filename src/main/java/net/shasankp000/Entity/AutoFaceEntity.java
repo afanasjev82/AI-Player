@@ -40,6 +40,16 @@ public class AutoFaceEntity {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("AutoFaceEntity");
     private static final double BOUNDING_BOX_SIZE = 32.0; // Detection range in blocks (increased for better combat awareness)
+    /**
+     * How close a hostile must be before navigation is suspended. Combat range
+     * (melee attack) is ~8 blocks, so a mob only endangers the bot when it is
+     * within roughly this distance. The {@link #BOUNDING_BOX_SIZE} box is much
+     * wider (awareness), but suspending navigation for a merely-visible mob
+     * froze the bot all night (a zombie 31 blocks away is no threat). The wider
+     * box still feeds awareness and the combat reaction; only this close range
+     * halts navigation.
+     */
+    private static final double THREAT_SUSPEND_RANGE = 12.0;
     private static final int INTERVAL_SECONDS = 1; // Interval in seconds to check for nearby entities (for entity detection)
     private static final int PROJECTILE_CHECK_INTERVAL_MS = 50; // Check projectiles every 50ms (1 game tick) - fast enough for arrows
     private static final ExecutorService executor3 = Executors.newSingleThreadExecutor();
@@ -281,7 +291,21 @@ public class AutoFaceEntity {
                 // ===== END PRIORITY: PROJECTILE DEFENSE =====
 
                 if (!hostileEntities.isEmpty()) {
-                    NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
+                    // A hostile inside the 32-block awareness box is NOT
+                    // necessarily a threat worth halting navigation: melee range
+                    // is ~8 blocks. Suspend only when the closest hostile is
+                    // within THREAT_SUSPEND_RANGE, otherwise a distant mob (a
+                    // zombie 31 blocks away) freezes the bot for the whole night.
+                    // When hostiles are present but all out of range, clear any
+                    // stale THREAT suspension so navigation resumes.
+                    double closestThreatDist = hostileEntities.stream()
+                            .mapToDouble(e -> Math.sqrt(e.distanceToSqr(bot.position())))
+                            .min().orElse(Double.MAX_VALUE);
+                    if (closestThreatDist <= THREAT_SUSPEND_RANGE) {
+                        NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
+                    } else {
+                        NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
+                    }
                     botBusy = true;
 
                     // Report all hostile entities to debug manager
