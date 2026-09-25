@@ -21,6 +21,34 @@ class GoalArrayParserTest {
     }
 
     @Test
+    void parsesGoalsObject() {
+        // The prompt now requests {"goals": [...]} because json-object mode
+        // forces an object, not a bare array.
+        List<String> goals = AutonomousGoalEngine.parseGoalArray(
+                "{\"goals\": [\"gather 32 wood\", \"build a shelter\", \"mine 16 stone\"]}");
+        assertEquals(List.of("gather 32 wood", "build a shelter", "mine 16 stone"), goals);
+    }
+
+    @Test
+    void parsesGoalsObjectWrappedInProse() {
+        List<String> goals = AutonomousGoalEngine.parseGoalArray(
+                "Here is the plan:\n{\"goals\": [\"gather 32 wood\", \"craft a crafting table\"]}");
+        assertEquals(List.of("gather 32 wood", "craft a crafting table"), goals);
+    }
+
+    @Test
+    void extractsBareLineGoalsFromProse() {
+        // qwen3 lists goals one-per-line without quotes when JSON mode fails.
+        String prose = "Let me think about what to do.\n"
+                + "gather 32 wood\n"
+                + "craft a crafting table\n"
+                + "mine 16 stone\n"
+                + "That should be enough.";
+        List<String> goals = AutonomousGoalEngine.parseGoalArray(prose);
+        assertEquals(List.of("gather 32 wood", "craft a crafting table", "mine 16 stone"), goals);
+    }
+
+    @Test
     void toleratesLeadingAndTrailingProse() {
         List<String> goals = AutonomousGoalEngine.parseGoalArray(
                 "Here is my plan:\n[\"gather 32 wood\", \"build a shelter\"]\nHope this helps!");

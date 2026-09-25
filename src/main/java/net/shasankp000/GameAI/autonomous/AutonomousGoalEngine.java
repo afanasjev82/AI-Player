@@ -2,6 +2,7 @@ package net.shasankp000.GameAI.autonomous;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -270,9 +271,11 @@ public class AutonomousGoalEngine {
             String systemPrompt =
                     "You are controlling a Minecraft bot. Based on the bot's current state, " +
                     "generate a prioritised list of 4-6 short, achievable goals for the bot to " +
-                    "complete right now. Reply with ONLY a valid JSON array of strings. " +
+                    "complete right now. Reply with ONLY a valid JSON object in the exact shape " +
+                    "{\"goals\": [\"goal one\", \"goal two\", ...]}. " +
                     "Each string must be a single concise goal in plain English. " +
-                    "Example: [\"gather 32 wood\", \"craft a crafting table\", \"mine 16 stone\"]\n" +
+                    "Example: {\"goals\": [\"gather 32 wood\", \"craft a crafting table\", \"mine 16 stone\"]}\n" +
+                    "Do not add any other text, explanation, or thinking outside the JSON object.\n" +
                     "IMPORTANT: if the bot's game mode is 'creative', it already has unlimited " +
                     "resources, so do NOT generate gather/mine/craft goals (there is nothing to " +
                     "collect or craft). Focus instead on building, exploring, and using blocks " +
@@ -283,7 +286,7 @@ public class AutonomousGoalEngine {
                     "surface.";
 
             String userPrompt = "Bot state:\n" + stateSnapshot +
-                    "\n\nGenerate the goal list JSON array now:";
+                    "\n\nGenerate the goal list JSON object now:";
 
             String response = callLLM(llmProvider, systemPrompt, userPrompt);
             if (response == null || response.isBlank()) {
@@ -673,6 +676,14 @@ public class AutonomousGoalEngine {
     static List<String> parseGoalArray(String response) {
         if (response == null || response.isBlank()) return List.of();
 
+        // 0. Object form: the prompt now requests {"goals": [...]}. JSON-mode
+        //    (Ollama `format` / OpenAI `json_object`) forces an OBJECT, not an
+        //    array, so this is the shape the model is actually likely to emit.
+        List<String> fromObject = tryParseGoalsObject(response);
+        if (fromObject != null && !fromObject.isEmpty()) {
+            return fromObject;
+        }
+
         // 1. Balanced-bracket extraction: first '[' to its matching ']'.
         int start = response.indexOf('[');
         if (start >= 0) {
@@ -695,8 +706,8 @@ public class AutonomousGoalEngine {
             }
         }
 
-        // 3. Last resort: extract bare quoted strings from the response.
-        List<String> extracted = extractQuotedStrings(response);
+        // 3. Last resort: extract quoted strings and bare line goals from prose.
+        List<String> extracted = extractGoalsFromProse(response);
         if (!extracted.isEmpty()) {
             LOGGER.info("[autonomous] Extracted {} goals from prose (no JSON array)", extracted.size());
             return extracted;
@@ -706,6 +717,31 @@ public class AutonomousGoalEngine {
         // reasoning into the server log is noisy and useless.
         LOGGER.warn("[autonomous] JSON parse error — {} chars of unparseable prose", response.length());
         return List.of();
+    }
+
+    /**
+     * Try to parse {@code {"goals": [...]} — the JSON-object shape the prompt
+     * requests (and that json-object mode forces). Returns null when the
+     * response is not that shape.
+     */
+    private static List<String> tryParseGoalsObject(String response) {
+        try {
+            JsonElement root = JsonParser.parseString(response);
+            if (!root.isJsonObject()) return null;
+            JsonObject obj = root.getAsJsonObject();
+            JsonElement goalsEl = obj.has("goals") ? obj.get("goals") : obj.get("goal");
+            if (goalsEl == null || !goalsEl.isJsonArray()) return null;
+            List<String> goals = new java.util.ArrayList<>();
+            for (JsonElement el : goalsEl.getAsJsonArray()) {
+                if (el.isJsonPrimitive()) {
+                    String goal = el.getAsString().trim();
+                    if (!goal.isEmpty()) goals.add(goal);
+                }
+            }
+            return goals;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Returns the index of the bracket matching the opening bracket at {@code openIdx}. */
@@ -760,8 +796,8 @@ public class AutonomousGoalEngine {
         }
     }
 
-    /** Extracts double-quoted substrings from a raw prose response. */
-    private static List<String> extractQuotedStrings(String response) {
+    /** Extracts double-quoted substrings and bare line goals from a raw prose response. */
+    private static List<String> extractGoalsFromProse(String response) {
         List<String> out = new java.util.ArrayList<>();
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("\"([^\"]+)\"")
@@ -772,7 +808,37 @@ public class AutonomousGoalEngine {
                 out.add(s);
             }
         }
+        // qwen3 often lists goals one-per-line WITHOUT quotes, interspersed with
+        // reasoning prose. Capture short lines that read like an imperative goal
+        // (start with a verb) so the prose fallback yields more than one goal.
+        if (out.isEmpty()) {
+            for (String line : response.split("\\R")) {
+                String s = line.trim();
+                if (s.length() < 3 || s.length() > 200) continue;
+                if (s.startsWith("- ")) s = s.substring(2).trim();
+                if (s.startsWith("* ")) s = s.substring(2).trim();
+                if (s.startsWith("• ")) s = s.substring(2).trim();
+                // Heuristic: an imperative goal usually begins with a verb and
+                // contains a space; pure reasoning prose rarely does both.
+                if (s.contains(" ") && looksLikeImperative(s) && isPlausibleGoal(s)) {
+                    out.add(s);
+                }
+            }
+        }
         return out;
+    }
+
+    /** Whether a bare line begins with a common goal verb (gather, craft, build, …). */
+    private static boolean looksLikeImperative(String s) {
+        String lower = s.toLowerCase();
+        String[] verbs = {"gather", "collect", "mine", "dig", "craft", "make", "build",
+                "place", "construct", "explore", "go", "walk", "move", "find", "search",
+                "farm", "plant", "harvest", "fight", "attack", "defend", "cook", "eat",
+                "sleep", "trade", "light", "create", "chop"};
+        for (String v : verbs) {
+            if (lower.startsWith(v + " ") || lower.equals(v)) return true;
+        }
+        return false;
     }
 
     /**
