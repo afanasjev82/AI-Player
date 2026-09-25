@@ -67,6 +67,13 @@ public class BlockPlacementTool {
                 // Step 3: Find the block item in inventory
                 ItemStack blockItem = findBlockInInventory(bot, normalizedBlockType);
                 if (blockItem == null || blockItem.isEmpty()) {
+                    // In creative the bot is not limited by inventory, so provision
+                    // the material instead of failing. Without this a creative bot
+                    // could not build at all — it has only its spawned tools in the
+                    // inventory, and creative mode does not auto-populate it.
+                    blockItem = provisionInCreative(bot, normalizedBlockType);
+                }
+                if (blockItem == null || blockItem.isEmpty()) {
                     String error = "❌ Block not found in inventory: " + normalizedBlockType;
                     LOGGER.warn(error);
                     return error;
@@ -159,6 +166,31 @@ public class BlockPlacementTool {
             return "minecraft:stone";
         }
         return blockType.contains(":") ? blockType : "minecraft:" + blockType;
+    }
+
+    /**
+     * In creative mode, give the bot a stack of {@code blockType} so it can
+     * build. Creative implies unlimited blocks, but the inventory is NOT
+     * auto-populated, so a creative bot otherwise fails every build with
+     * "Block not found in inventory".
+     *
+     * @return the newly added stack, or null when the bot is not in creative or
+     *         the block type is invalid
+     */
+    private static ItemStack provisionInCreative(ServerPlayer bot, String blockType) {
+        if (!bot.isCreative()) {
+            return null; // survival: material must genuinely be gathered
+        }
+        Identifier blockId = Identifier.tryParse(blockType);
+        if (blockId == null) return null;
+        Block targetBlock = BuiltInRegistries.BLOCK.getValue(blockId);
+        if (targetBlock == null || targetBlock.asItem() == net.minecraft.world.item.Items.AIR) {
+            return null;
+        }
+        ItemStack stack = new ItemStack(targetBlock.asItem(), 64);
+        bot.getInventory().add(stack);
+        LOGGER.info("Creative mode: provisioned 64x {} for building", blockType);
+        return stack;
     }
 
     /**

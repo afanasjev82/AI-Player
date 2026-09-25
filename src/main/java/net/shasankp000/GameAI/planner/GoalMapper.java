@@ -55,6 +55,20 @@ public class GoalMapper {
             return t;
         });
 
+    /**
+     * Goals the edge-LLM already failed to classify, mapped to the time of
+     * failure. Without this the autonomous loop re-asks on every re-plan for the
+     * same unclassifiable goal (e.g. "light surrounding area with torches"),
+     * burning the full timeout each time and making the bot look stuck.
+     */
+    private static final Map<String, Long> UNCLASSIFIABLE = new ConcurrentHashMap<>();
+
+    /** How long to remember an unclassifiable goal before retrying the LLM. */
+    private static final long UNCLASSIFIABLE_TTL_MS = 10 * 60 * 1000L; // 10 min
+
+    /** Upper bound on remembered unclassifiable goals (avoids unbounded growth). */
+    private static final int UNCLASSIFIABLE_MAX = 256;
+
     // ── Goal IDs ──────────────────────────────────────────────────────────────
     public static final short GOAL_MINE    = 1;
     public static final short GOAL_BUILD   = 2;
@@ -108,24 +122,52 @@ public class GoalMapper {
         LOGGER.info("Token scorer returned UNKNOWN for '{}', trying edge-LLM fallback…",
             naturalLanguageGoal);
 
+        // Negative cache: if the edge-LLM already failed on this exact goal
+        // recently, skip the (slow, timing-out) retry entirely. This is what
+        // previously produced an endless 3s-timeout loop for goals the model
+        // simply cannot classify.
+        Long failedAt = UNCLASSIFIABLE.get(naturalLanguageGoal);
+        if (failedAt != null) {
+            if (System.currentTimeMillis() - failedAt < UNCLASSIFIABLE_TTL_MS) {
+                LOGGER.debug("Skipping edge-LLM for '{}' (recently unclassifiable)",
+                        naturalLanguageGoal);
+                return GOAL_UNKNOWN;
+            }
+            UNCLASSIFIABLE.remove(naturalLanguageGoal);
+        }
+
         // Step 2 — edge-LLM fallback (async with hard timeout)
+        Future<Short> future = null;
         try {
-            Future<Short> future = EXECUTOR.submit(() -> parseGoalWithEdgeLLM(naturalLanguageGoal));
+            future = EXECUTOR.submit(() -> parseGoalWithEdgeLLM(naturalLanguageGoal));
             short llmResult = future.get(EDGE_LLM_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             if (llmResult != GOAL_UNKNOWN) {
                 LOGGER.info("✓ Edge-LLM classified '{}' → {} ({})",
                     naturalLanguageGoal, llmResult, getGoalName(llmResult));
                 return llmResult;
             }
+            rememberUnclassifiable(naturalLanguageGoal);
         } catch (TimeoutException e) {
-            LOGGER.warn("⏱ Edge-LLM timed out after {}ms for '{}'",
-                EDGE_LLM_TIMEOUT_MS, naturalLanguageGoal);
+            // Cancel the in-flight task: without this the single-thread executor
+            // stays occupied by the abandoned call, so every later goal queues
+            // behind a request whose result nobody wants.
+            if (future != null) future.cancel(true);
+            LOGGER.warn("⏱ Edge-LLM timed out after {}ms for '{}' — will not retry for {} min",
+                EDGE_LLM_TIMEOUT_MS, naturalLanguageGoal, UNCLASSIFIABLE_TTL_MS / 60_000);
+            rememberUnclassifiable(naturalLanguageGoal);
         } catch (Exception e) {
+            if (future != null) future.cancel(true);
             LOGGER.warn("⚠ Edge-LLM fallback failed: {}", e.getMessage());
         }
 
         LOGGER.warn("⚠ Could not classify '{}' — returning GOAL_UNKNOWN", naturalLanguageGoal);
         return GOAL_UNKNOWN;
+    }
+
+    /** Remember that {@code goal} could not be classified by the edge-LLM. */
+    private static void rememberUnclassifiable(String goal) {
+        if (UNCLASSIFIABLE.size() >= UNCLASSIFIABLE_MAX) UNCLASSIFIABLE.clear();
+        UNCLASSIFIABLE.put(goal, System.currentTimeMillis());
     }
 
     // ── Weighted token scorer ─────────────────────────────────────────────────

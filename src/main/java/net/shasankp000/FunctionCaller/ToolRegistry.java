@@ -343,15 +343,22 @@ public class ToolRegistry {
                     "searchFlatSite",
                     """
                     Finds a flat, clear site near the bot suitable for building the given
-                    structure. Stores the site coordinates in shared state for a following
-                    goTo step.
+                    structure. On success the site coordinates are stored in shared state as
+                    lastFlatSite.x, lastFlatSite.y and lastFlatSite.z — a following goTo step
+                    must reference them exactly as "$lastFlatSite.x", "$lastFlatSite.y" and
+                    "$lastFlatSite.z". (foundSite.x/y/z are registered as aliases, but prefer
+                    lastFlatSite.*.) Do not invent other key names: an unresolved coordinate
+                    placeholder aborts the step.
                     """,
                     List.of(
                             new Tool.Parameter("structure", "Structure to size the site for: wall, shelter, or room.")
                     ),
-                    Set.of("foundSite.x", "foundSite.y", "foundSite.z"),
+                    Set.of("lastFlatSite.x", "lastFlatSite.y", "lastFlatSite.z"),
                     (sharedState, paramMap, result) -> {
                         if (result instanceof BlockPos pos) {
+                            sharedState.put("lastFlatSite.x", pos.getX());
+                            sharedState.put("lastFlatSite.y", pos.getY());
+                            sharedState.put("lastFlatSite.z", pos.getZ());
                             sharedState.put("foundSite.x", pos.getX());
                             sharedState.put("foundSite.y", pos.getY());
                             sharedState.put("foundSite.z", pos.getZ());

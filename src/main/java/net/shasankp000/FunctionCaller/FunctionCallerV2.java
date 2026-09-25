@@ -1679,6 +1679,35 @@ public class FunctionCallerV2 {
         return value;
     }
 
+    /**
+     * Resolve a parameter that must be a coordinate, failing loudly when it
+     * cannot be resolved.
+     *
+     * <p>{@link #resolvePlaceholder} defaults an unresolved value to {@code 0}.
+     * For a coordinate that is dangerous rather than harmless: when the LLM
+     * invented a state-key name (e.g. {@code $lastFlatSite.x}) the bot was
+     * silently tasked with walking to the world origin (0,0,0). Aborting the
+     * step is far better than moving the bot somewhere arbitrary.
+     *
+     * @throws IllegalStateException when the value is absent or unresolved
+     */
+    private static String resolveCoord(String value, Map<String, Object> state, String axis) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("No " + axis + " value supplied for this step");
+        }
+        if (value.startsWith("$")) {
+            String key = value.substring(1);
+            Object resolvedObj = SharedStateUtils.getValue(state, key);
+            if (resolvedObj == null) {
+                throw new IllegalStateException("Unresolved coordinate placeholder '" + key
+                        + "' for " + axis + " (defaulting to 0 would move the bot to the world origin)");
+            }
+            logger.debug("🔁 Resolved coordinate {} from {} → {}", axis, key, resolvedObj);
+            return resolvedObj.toString();
+        }
+        return value;
+    }
+
     private static void updateState(List<String> keys, List<Object> values, Map<String, Object> state) {
         for (int i = 0; i < keys.size(); i++) {
             SharedStateUtils.setValue(state, keys.get(i), values.get(i));
@@ -1697,9 +1726,9 @@ public class FunctionCallerV2 {
     private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap, Map<String, Object> state) {
         if ("mineBlock".equals(functionName)) {
             try {
-                int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
-                int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
-                int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
+                int targetY = Integer.parseInt(resolveCoord(paramMap.get("targetY"), state, "targetY"));
+                int targetZ = Integer.parseInt(resolveCoord(paramMap.get("targetZ"), state, "targetZ"));
                 logger.info("Calling method: mineBlock with targetX={} targetY={} targetZ={}",
                         targetX, targetY, targetZ);
                 if (botSource == null || botSource.getPlayer() == null) {
@@ -1728,9 +1757,9 @@ public class FunctionCallerV2 {
 
             switch (functionName) {
                 case "goTo" -> {
-                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
-                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
-                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    int x = Integer.parseInt(resolveCoord(paramMap.get("x"), state, "x"));
+                    int y = Integer.parseInt(resolveCoord(paramMap.get("y"), state, "y"));
+                    int z = Integer.parseInt(resolveCoord(paramMap.get("z"), state, "z"));
                     boolean sprint = Boolean.parseBoolean(resolvePlaceholder(paramMap.get("sprint"), state));
                     logger.info("Calling method: goTo with x={} y={} z={} sprint={}", x, y, z, sprint);
                     Tools.goTo(x, y, z, sprint);
@@ -1773,9 +1802,9 @@ public class FunctionCallerV2 {
                     Tools.look(cardinalDirection);
                 }
                 case "placeBlock" -> {
-                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
-                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
-                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
+                    int targetY = Integer.parseInt(resolveCoord(paramMap.get("targetY"), state, "targetY"));
+                    int targetZ = Integer.parseInt(resolveCoord(paramMap.get("targetZ"), state, "targetZ"));
                     String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
                     logger.info("Calling method: placeBlock with targetX={} targetY={} targetZ={} blockType={}",
                             targetX, targetY, targetZ, blockType);
@@ -1870,18 +1899,18 @@ public class FunctionCallerV2 {
                     }
                 }
                 case "farmTill" -> {
-                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
-                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
-                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    int x = Integer.parseInt(resolveCoord(paramMap.get("x"), state, "x"));
+                    int y = Integer.parseInt(resolveCoord(paramMap.get("y"), state, "y"));
+                    int z = Integer.parseInt(resolveCoord(paramMap.get("z"), state, "z"));
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
                     logger.info("Calling method: farmTill at ({}, {}, {})", x, y, z);
                     getFunctionOutput(bot == null ? "Bot not found."
                             : FarmingTool.till(bot, new BlockPos(x, y, z)).join());
                 }
                 case "farmPlant" -> {
-                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
-                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
-                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    int x = Integer.parseInt(resolveCoord(paramMap.get("x"), state, "x"));
+                    int y = Integer.parseInt(resolveCoord(paramMap.get("y"), state, "y"));
+                    int z = Integer.parseInt(resolveCoord(paramMap.get("z"), state, "z"));
                     String seed = resolvePlaceholder(paramMap.get("seed"), state);
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
                     logger.info("Calling method: farmPlant {} at ({}, {}, {})", seed, x, y, z);
@@ -1889,9 +1918,9 @@ public class FunctionCallerV2 {
                             : FarmingTool.plant(bot, new BlockPos(x, y, z), seed).join());
                 }
                 case "farmHarvest" -> {
-                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
-                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
-                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    int x = Integer.parseInt(resolveCoord(paramMap.get("x"), state, "x"));
+                    int y = Integer.parseInt(resolveCoord(paramMap.get("y"), state, "y"));
+                    int z = Integer.parseInt(resolveCoord(paramMap.get("z"), state, "z"));
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
                     logger.info("Calling method: farmHarvest at ({}, {}, {})", x, y, z);
                     getFunctionOutput(bot == null ? "Bot not found."
@@ -1926,9 +1955,21 @@ public class FunctionCallerV2 {
                         } else {
                             BlockPos site = SiteSurveyor.findFlatSite(bot, dims[0], dims[1], dims[2], 12);
                             if (site != null) {
+                                // Publish the site under both key spellings. The LLM
+                                // regularly refers to it as "lastFlatSite" when it
+                                // writes a follow-up goTo step, so registering that
+                                // alias keeps its plans working instead of leaving
+                                // $lastFlatSite.* unresolved (which used to default
+                                // to 0,0,0 and send the bot to the world origin).
                                 SharedStateUtils.setValue(state, "found_site_x", site.getX());
                                 SharedStateUtils.setValue(state, "found_site_y", site.getY());
                                 SharedStateUtils.setValue(state, "found_site_z", site.getZ());
+                                SharedStateUtils.setValue(state, "foundSite.x", site.getX());
+                                SharedStateUtils.setValue(state, "foundSite.y", site.getY());
+                                SharedStateUtils.setValue(state, "foundSite.z", site.getZ());
+                                SharedStateUtils.setValue(state, "lastFlatSite.x", site.getX());
+                                SharedStateUtils.setValue(state, "lastFlatSite.y", site.getY());
+                                SharedStateUtils.setValue(state, "lastFlatSite.z", site.getZ());
                                 SharedStateUtils.setValue(state, "search_site_success", true);
                                 logger.info("✓ searchFlatSite found site at ({}, {}, {})",
                                         site.getX(), site.getY(), site.getZ());
@@ -2149,6 +2190,16 @@ public class FunctionCallerV2 {
                     params.put("z", String.valueOf(sz));
                     params.put("sprint", "true");
                     logger.info("🔗 Resolved goTo params from build site SharedState: ({}, {}, {})", sx, sy, sz);
+                } else if (SharedStateUtils.getValue(state, "lastFlatSite.x") != null) {
+                    // Alias registered by the searchFlatSite tool / LLM pipelines.
+                    int sx = (int) SharedStateUtils.getValue(state, "lastFlatSite.x");
+                    int sy = (int) SharedStateUtils.getValue(state, "lastFlatSite.y");
+                    int sz = (int) SharedStateUtils.getValue(state, "lastFlatSite.z");
+                    params.put("x", String.valueOf(sx));
+                    params.put("y", String.valueOf(sy));
+                    params.put("z", String.valueOf(sz));
+                    params.put("sprint", "true");
+                    logger.info("🔗 Resolved goTo params from lastFlatSite alias: ({}, {}, {})", sx, sy, sz);
                 } else if (SharedStateUtils.getValue(state, "found_block_x") != null) {
                     int blockX = (int) SharedStateUtils.getValue(state, "found_block_x");
                     int blockY = (int) SharedStateUtils.getValue(state, "found_block_y");
@@ -2548,6 +2599,11 @@ public class FunctionCallerV2 {
             // A build that cannot place its blocks has produced nothing; treat it
             // as critical so the plan fails loudly instead of reporting success.
             case "build" -> true;
+            // goTo now fails hard when a coordinate placeholder cannot be
+            // resolved (see resolveCoord). Treat it as critical so the plan
+            // aborts there instead of continuing with the bot somewhere
+            // arbitrary.
+            case "goto", "movetocoordinates" -> true;
             default -> false;
         };
     }
