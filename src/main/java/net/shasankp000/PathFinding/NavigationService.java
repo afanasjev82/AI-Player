@@ -618,6 +618,16 @@ public final class NavigationService {
         NavigationSession active = SESSIONS.get(session.botId);
         if (active == null || !generationMatches(active.generation, session.generation)
                 || !SESSIONS.remove(session.botId, session)) return;
+        // A session teardown invalidates the transient THREAT suspension, which
+        // is owned by AutoFaceEntity's periodic tick rather than a tool with a
+        // definite lifetime. If that tick is not running (bot disconnected mid
+        // mob-wave, or the tick died), the reason would otherwise leak into the
+        // next session and re-freeze the bot. EATING/MINING/TRADE are left
+        // alone — those are managed by explicit tool suspend/resume pairs.
+        EnumSet<SuspensionReason> reasons = SUSPENSIONS.get(session.botId);
+        if (reasons != null && reasons.remove(SuspensionReason.THREAT) && reasons.isEmpty()) {
+            SUSPENSIONS.remove(session.botId);
+        }
         MinecraftServer server = session.server;
         ServerPlayer player = server.getPlayerList().getPlayer(session.botId);
         BlockPos finalPosition = player != null ? player.blockPosition() : session.lastPosition;

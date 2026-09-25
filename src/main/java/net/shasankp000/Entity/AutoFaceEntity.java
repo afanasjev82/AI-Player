@@ -161,6 +161,14 @@ public class AutoFaceEntity {
         botExecutor.scheduleAtFixedRate(() -> {
             // Run detection and facing logic
 
+            // scheduleAtFixedRate PERMANENTLY cancels this task if it throws an
+            // uncaught exception. A single transient failure (e.g. an
+            // IOException rethrown as RuntimeException from detectAndReact
+            // during a mob wave) would otherwise kill the loop for good — and
+            // with it the only caller of NavigationService.resume(THREAT),
+            // leaving the bot suspended forever. Catch everything so the loop
+            // always survives to the next tick.
+            try {
             if (server != null && server.isRunning() && bot.isAlive()) {
 
                 // ===== PRIORITY: UPDATE EVASION STATUS =====
@@ -602,8 +610,9 @@ public class AutoFaceEntity {
 
 
             }
-
-
+            } catch (Throwable t) {
+                LOGGER.error("AutoFace tick failed for bot {}", bot.getName().getString(), t);
+            }
         }, 0, 33, TimeUnit.MILLISECONDS); // Run every 33ms (30 FPS) for ultra-fast projectile detection
 
     }
