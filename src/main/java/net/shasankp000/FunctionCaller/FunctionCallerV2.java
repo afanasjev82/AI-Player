@@ -1908,9 +1908,45 @@ public class FunctionCallerV2 {
                     String structure = resolvePlaceholder(paramMap.get("structure"), state);
                     String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
-                    logger.info("Calling method: build structure={} blockType={}", structure, blockType);
+                    logger.info("Calling method: build structure={} blockType={} (with recovery)", structure, blockType);
                     getFunctionOutput(bot == null ? "Bot not found."
-                            : StructureBuilder.build(bot, structure, blockType).join());
+                            : StructureBuilder.buildWithRecovery(bot, structure, blockType).join());
+                }
+                case "searchFlatSite" -> {
+                    String structure = resolvePlaceholder(paramMap.get("structure"), state);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: searchFlatSite for structure={}", structure);
+                    if (bot == null) {
+                        getFunctionOutput("Bot not found.");
+                    } else {
+                        int[] dims = StructureBuilder.dimensions(structure);
+                        if (dims == null) {
+                            SharedStateUtils.setValue(state, "search_site_success", false);
+                            getFunctionOutput("❌ Unknown structure: " + structure);
+                        } else {
+                            BlockPos site = SiteSurveyor.findFlatSite(bot, dims[0], dims[1], dims[2], 12);
+                            if (site != null) {
+                                SharedStateUtils.setValue(state, "found_site_x", site.getX());
+                                SharedStateUtils.setValue(state, "found_site_y", site.getY());
+                                SharedStateUtils.setValue(state, "found_site_z", site.getZ());
+                                SharedStateUtils.setValue(state, "search_site_success", true);
+                                logger.info("✓ searchFlatSite found site at ({}, {}, {})",
+                                        site.getX(), site.getY(), site.getZ());
+                                getFunctionOutput("✅ Found flat site at (" + site.getX() + ", "
+                                        + site.getY() + ", " + site.getZ() + ")");
+                            } else {
+                                SharedStateUtils.setValue(state, "search_site_success", false);
+                                getFunctionOutput("❌ No flat site found nearby");
+                            }
+                        }
+                    }
+                }
+                case "terraform" -> {
+                    String structure = resolvePlaceholder(paramMap.get("structure"), state);
+                    ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
+                    logger.info("Calling method: terraform for structure={}", structure);
+                    getFunctionOutput(bot == null ? "Bot not found."
+                            : StructureBuilder.terraform(bot, structure).join());
                 }
                 case "collect" -> {
                     ServerPlayer bot = (botSource != null) ? botSource.getPlayer() : null;
@@ -2102,8 +2138,18 @@ public class FunctionCallerV2 {
         switch (actionName) {
             case "goto":
             case "movetocoordinates":
-                // Try to get coords from SharedState first (if previous searchBlocks found something)
-                if (SharedStateUtils.getValue(state, "found_block_x") != null) {
+                // Prefer a build site found by searchFlatSite; then a block found
+                // by searchBlocks; then explicit params.
+                if (SharedStateUtils.getValue(state, "found_site_x") != null) {
+                    int sx = (int) SharedStateUtils.getValue(state, "found_site_x");
+                    int sy = (int) SharedStateUtils.getValue(state, "found_site_y");
+                    int sz = (int) SharedStateUtils.getValue(state, "found_site_z");
+                    params.put("x", String.valueOf(sx));
+                    params.put("y", String.valueOf(sy));
+                    params.put("z", String.valueOf(sz));
+                    params.put("sprint", "true");
+                    logger.info("🔗 Resolved goTo params from build site SharedState: ({}, {}, {})", sx, sy, sz);
+                } else if (SharedStateUtils.getValue(state, "found_block_x") != null) {
                     int blockX = (int) SharedStateUtils.getValue(state, "found_block_x");
                     int blockY = (int) SharedStateUtils.getValue(state, "found_block_y");
                     int blockZ = (int) SharedStateUtils.getValue(state, "found_block_z");
@@ -2217,6 +2263,15 @@ public class FunctionCallerV2 {
                 }
                 break;
 
+            case "searchflatsite":
+            case "terraform":
+                if (paramArray.length >= 1) {
+                    params.put("structure", paramArray[0]);
+                } else {
+                    params.put("structure", "shelter");
+                }
+                break;
+
             case "combat":
             case "trade":
             case "collect":
@@ -2323,6 +2378,24 @@ public class FunctionCallerV2 {
                     return true;
                 }
                 logger.warn("✗ build verification failed: {}", functionOutput);
+                return false;
+
+            case "searchflatsite":
+                // searchFlatSite stores found_site_x/y/z on success.
+                if (SharedStateUtils.getValue(sharedState, "found_site_x") != null) {
+                    logger.info("✓ searchFlatSite verification: site found");
+                    return true;
+                }
+                logger.warn("✗ searchFlatSite verification failed: no site found");
+                return false;
+
+            case "terraform":
+                // terraform returns "✅ Terraformed site (...)" on success.
+                if (functionOutput != null && functionOutput.startsWith("✅")) {
+                    logger.info("✓ terraform verification: {}", functionOutput);
+                    return true;
+                }
+                logger.warn("✗ terraform verification failed: {}", functionOutput);
                 return false;
 
             default:

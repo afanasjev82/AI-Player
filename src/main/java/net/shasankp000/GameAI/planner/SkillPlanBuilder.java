@@ -137,6 +137,14 @@ public class SkillPlanBuilder {
         String structure = inferStructure(goalText);
         String blockType = inferPlacementBlock(goalText);
         List<PlannedStep> steps = new ArrayList<>();
+        // A single self-sufficient `build` step. StructureBuilder.buildWithRecovery
+        // internally decomposes the goal deterministically:
+        //   clear/terraform the footprint → place blocks
+        //   on failure → search a flat site nearby → navigate → retry
+        //   on repeated failure → fall back to a smaller structure
+        // Chaining a separate `terraform` step before `build` was removed: it
+        // cleared the ground at floor level, so the following build had nothing
+        // solid to place the floor against ("No suitable surface found").
         steps.add(step("build", structure + "," + blockType));
         return toPlan(goalId, steps);
     }

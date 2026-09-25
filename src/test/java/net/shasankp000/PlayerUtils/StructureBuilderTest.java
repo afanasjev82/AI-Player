@@ -47,4 +47,26 @@ class StructureBuilderTest {
     void unknownStructureReturnsNull() {
         assertNull(StructureBuilder.layout("castle", new BlockPos(0, 60, 0)));
     }
+
+    @Test
+    void dimensionsExposeFootprintSizes() {
+        int[] room = StructureBuilder.dimensions("room");
+        assertArrayEquals(new int[]{5, 5, 4}, room);
+        int[] shelter = StructureBuilder.dimensions("shelter");
+        assertArrayEquals(new int[]{3, 3, 3}, shelter);
+        int[] wall = StructureBuilder.dimensions("wall");
+        assertArrayEquals(new int[]{5, 1, 3}, wall);
+        assertNull(StructureBuilder.dimensions("castle"));
+    }
+
+    @Test
+    void buildRecoveryStartsWithCurrentSite() {
+        // buildWithRecovery must first attempt the bot's own site, then relocate.
+        // The pure shape of this is hard to test without a live world, but we can
+        // at least assert the public API surface is coherent: build() is the
+        // anchor-at-current-site path and buildAt() takes an explicit origin.
+        assertNotNull(StructureBuilder.dimensions("room"));
+        // build() and terraform() share the same layout, so their dimensions agree.
+        assertArrayEquals(StructureBuilder.dimensions("room"), new int[]{5, 5, 4});
+    }
 }

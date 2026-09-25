@@ -326,6 +326,8 @@ public class ToolRegistry {
                     """
                     Builds a simple structure near the bot from blocks in its inventory.
                     Supported structures: wall, shelter, room.
+                    If the current site is blocked, searches for a flat site nearby,
+                    navigates there, and retries (falling back to a smaller structure).
                     """,
                     List.of(
                             new Tool.Parameter("structure", "Structure to build: wall, shelter, or room."),
@@ -334,6 +336,41 @@ public class ToolRegistry {
                     Set.of("build.result"),
                     (sharedState, paramMap, result) -> {
                         if (result instanceof String s) sharedState.put("build.result", s);
+                    }
+            ),
+
+            new Tool(
+                    "searchFlatSite",
+                    """
+                    Finds a flat, clear site near the bot suitable for building the given
+                    structure. Stores the site coordinates in shared state for a following
+                    goTo step.
+                    """,
+                    List.of(
+                            new Tool.Parameter("structure", "Structure to size the site for: wall, shelter, or room.")
+                    ),
+                    Set.of("foundSite.x", "foundSite.y", "foundSite.z"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof BlockPos pos) {
+                            sharedState.put("foundSite.x", pos.getX());
+                            sharedState.put("foundSite.y", pos.getY());
+                            sharedState.put("foundSite.z", pos.getZ());
+                        }
+                    }
+            ),
+
+            new Tool(
+                    "terraform",
+                    """
+                    Clears and levels the footprint of a structure at the bot's current site
+                    without building it. Use to prepare the ground before placing blocks.
+                    """,
+                    List.of(
+                            new Tool.Parameter("structure", "Structure to size the cleared area for: wall, shelter, or room.")
+                    ),
+                    Set.of("terraform.result"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof String s) sharedState.put("terraform.result", s);
                     }
             ),
 

@@ -5,12 +5,14 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.shasankp000.PathFinding.GoTo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Structure building (Phase C): lays out a block pattern relative to the bot
@@ -41,16 +43,30 @@ public final class StructureBuilder {
      */
     private static final double BUILD_REACH = 16.0;
 
+    /** How many alternative sites to try before falling back to a smaller structure. */
+    private static final int MAX_SITE_ATTEMPTS = 3;
+
     private StructureBuilder() {}
 
     /** Build {@code structureName} (wall/shelter/room) near the bot using {@code blockType}. */
     public static CompletableFuture<String> build(ServerPlayer bot, String structureName, String blockType) {
+        return buildAt(bot, structureName, blockType, null);
+    }
+
+    /**
+     * Build a structure anchored at an explicit {@code origin} (the bot's
+     * standing block). If {@code origin} is null, the bot's current position is
+     * used.
+     */
+    public static CompletableFuture<String> buildAt(ServerPlayer bot, String structureName,
+                                                     String blockType, BlockPos origin) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (bot == null || !bot.isAlive() || bot.hasDisconnected()) {
                     return "❌ Bot is unavailable.";
                 }
-                return doBuild(bot, structureName, blockType);
+                BlockPos anchor = origin != null ? origin : bot.blockPosition();
+                return doBuildAt(bot, structureName, blockType, anchor);
             } catch (Exception e) {
                 LOGGER.error("Build failed: {}", e.getMessage(), e);
                 return "❌ Build failed: " + e.getMessage();
@@ -58,8 +74,102 @@ public final class StructureBuilder {
         });
     }
 
-    private static String doBuild(ServerPlayer bot, String structureName, String blockType) {
-        List<BlockPos> layout = layout(structureName, bot.blockPosition());
+    /**
+     * Gauntlet-style build: try the current site; on failure search for a
+     * nearby flat site, navigate there, and retry. Falls back to a smaller
+     * structure when even a new site won't work. Deterministic — no LLM in the
+     * loop — so it is fast and never blocks on a slow/timing-out model.
+     */
+    public static CompletableFuture<String> buildWithRecovery(ServerPlayer bot, String structureName,
+                                                              String blockType) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                if (bot == null || !bot.isAlive() || bot.hasDisconnected()) {
+                    return "❌ Bot is unavailable.";
+                }
+                String result = doBuildAt(bot, structureName, blockType, bot.blockPosition());
+                if (result.startsWith("✅")) return result;
+
+                LOGGER.warn("Build failed at current site ({}); searching for a flat site nearby", result);
+                int[] dims = dimensions(structureName);
+                if (dims == null) return result;
+
+                // Retry on progressively wider search rings.
+                for (int attempt = 1; attempt <= MAX_SITE_ATTEMPTS; attempt++) {
+                    BlockPos site = SiteSurveyor.findFlatSite(bot, dims[0], dims[1], dims[2],
+                            6 + attempt * 3);
+                    if (site == null) {
+                        LOGGER.warn("No flat site found (attempt {})", attempt);
+                        continue;
+                    }
+                    String nav = goTo(bot, site);
+                    if (!nav.contains("moved to position")) {
+                        LOGGER.warn("Navigation to site {} failed: {}", site, nav);
+                        continue;
+                    }
+                    result = doBuildAt(bot, structureName, blockType, bot.blockPosition());
+                    if (result.startsWith("✅")) {
+                        return result + " (relocated)";
+                    }
+                }
+
+                // Fallback: build a smaller structure in place.
+                String smaller = smallerStructure(structureName);
+                if (smaller != null) {
+                    LOGGER.warn("Falling back from {} to {}", structureName, smaller);
+                    result = doBuildAt(bot, smaller, blockType, bot.blockPosition());
+                    if (result.startsWith("✅")) return result + " (built " + smaller + " instead)";
+                }
+                return result;
+            } catch (Exception e) {
+                LOGGER.error("Build failed: {}", e.getMessage(), e);
+                return "❌ Build failed: " + e.getMessage();
+            }
+        });
+    }
+
+    /** Clear (terraform) the footprint of a structure at the bot's site, without building. */
+    public static CompletableFuture<String> terraform(ServerPlayer bot, String structureName) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                if (bot == null || !bot.isAlive() || bot.hasDisconnected()) {
+                    return "❌ Bot is unavailable.";
+                }
+                List<BlockPos> layout = layout(structureName, bot.blockPosition());
+                if (layout == null) {
+                    return "❌ Unknown structure: " + structureName
+                            + " (supported: wall, shelter, room).";
+                }
+                int cleared = clearVolume(bot, layout);
+                return "✅ Terraformed site (" + cleared + " blocks cleared).";
+            } catch (Exception e) {
+                LOGGER.error("Terraform failed: {}", e.getMessage(), e);
+                return "❌ Terraform failed: " + e.getMessage();
+            }
+        });
+    }
+
+    /** Footprint dimensions {@code {x, z, height}} for a structure, or null if unknown. */
+    public static int[] dimensions(String structureName) {
+        return switch (structureName.toLowerCase()) {
+            case "wall"    -> new int[]{5, 1, 3};
+            case "shelter" -> new int[]{3, 3, 3};
+            case "room"    -> new int[]{5, 5, 4};
+            default        -> null;
+        };
+    }
+
+    /** A smaller structure to fall back to when a build won't fit, or null. */
+    private static String smallerStructure(String structureName) {
+        return switch (structureName.toLowerCase()) {
+            case "room"    -> "shelter";
+            case "shelter" -> "wall";
+            default        -> null;
+        };
+    }
+
+    private static String doBuildAt(ServerPlayer bot, String structureName, String blockType, BlockPos origin) {
+        List<BlockPos> layout = layout(structureName, origin);
         if (layout == null) {
             return "❌ Unknown structure: " + structureName
                     + " (supported: wall, shelter, room).";
@@ -90,6 +200,16 @@ public final class StructureBuilder {
         return "✅ Built " + structureName + " (" + placed + " blocks).";
     }
 
+    private static String goTo(ServerPlayer bot, BlockPos site) {
+        try {
+            return GoTo.goTo(bot.createCommandSourceStack().withSuppressedOutput()
+                    .withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS),
+                    site.getX(), site.getY(), site.getZ(), true);
+        } catch (Exception e) {
+            return "❌ Navigation failed: " + e.getMessage();
+        }
+    }
+
     /**
      * Clear every cell inside the bounding volume of {@code layout} (including
      * the hollow interior and the door gap, so the result is a clean box rather
@@ -97,9 +217,11 @@ public final class StructureBuilder {
      *
      * <p>Block edits are marshalled onto the server thread: this runs on the
      * common ForkJoinPool, and mutating the world off-thread is unsafe.
+     *
+     * @return the number of blocks cleared
      */
-    private static void clearVolume(ServerPlayer bot, List<BlockPos> layout) {
-        if (layout.isEmpty()) return;
+    private static int clearVolume(ServerPlayer bot, List<BlockPos> layout) {
+        if (layout.isEmpty()) return 0;
         Level level = bot.level();
         MinecraftServer server = bot.level().getServer();
 
@@ -114,6 +236,7 @@ public final class StructureBuilder {
         BlockPos botFeet = bot.blockPosition();
         BlockPos botHead = botFeet.above();
 
+        AtomicInteger cleared = new AtomicInteger();
         runOnServer(server, () -> {
             for (int x = minX; x <= maxX; x++) {
                 for (int y = minY; y <= maxY; y++) {
@@ -122,6 +245,7 @@ public final class StructureBuilder {
                         if (p.equals(botFeet) || p.equals(botHead)) continue;
                         if (!level.getBlockState(p).isAir()) {
                             level.setBlockAndUpdate(p, Blocks.AIR.defaultBlockState());
+                            cleared.incrementAndGet();
                         }
                     }
                 }
@@ -130,6 +254,7 @@ public final class StructureBuilder {
         LOGGER.info("Cleared build site {}..{} ({}x{}x{})",
                 new BlockPos(minX, minY, minZ), new BlockPos(maxX, maxY, maxZ),
                 maxX - minX + 1, maxY - minY + 1, maxZ - minZ + 1);
+        return cleared.get();
     }
 
     /** Run {@code task} on the server thread and wait for it to finish. */
