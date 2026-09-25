@@ -1144,12 +1144,26 @@ public class modCommandRegistry {
      * (stone/ore) and a wooden axe (wood). Without this the bot spawns empty-
      * handed and combat correctly evades ("Unarmed — evasion is smart choice"),
      * which is what prompted the "Paul has no melee weapons" report.
+     *
+     * <p>It also grants a small stock of building material and food so the bot
+     * can produce a first shelter without a manual {@code /give} after every
+     * server restart (restarts wipe any hand-granted items; only this spawn-time
+     * grant survives them).
      */
     private static void giveStarterKit(ServerPlayer bot) {
         try {
-            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_SWORD));
-            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_PICKAXE));
-            bot.getInventory().add(new ItemStack(net.minecraft.world.item.Items.WOODEN_AXE));
+            var inv = bot.getInventory();
+            inv.add(new ItemStack(net.minecraft.world.item.Items.WOODEN_SWORD));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.WOODEN_PICKAXE));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.WOODEN_AXE));
+            // Building + survival basics so the bot can build a first shelter and
+            // not starve immediately after spawn. 128 planks covers a full "room"
+            // (96 blocks) with margin; 96 cobblestone covers a stone room.
+            inv.add(new ItemStack(net.minecraft.world.item.Items.OAK_LOG, 32));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.OAK_PLANKS, 128));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.COBBLESTONE, 96));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.BREAD, 16));
+            inv.add(new ItemStack(net.minecraft.world.item.Items.TORCH, 32));
             bot.getInventory().setChanged();
             bot.containerMenu.broadcastChanges();
             LOGGER.info("Gave starter kit to {}", bot.getName().getString());
