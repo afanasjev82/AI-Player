@@ -1,7 +1,10 @@
 package net.shasankp000.PlayerUtils;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +31,16 @@ import java.util.concurrent.CompletableFuture;
 public final class StructureBuilder {
     private static final Logger LOGGER = LoggerFactory.getLogger("structure-builder");
 
+    /**
+     * Reach allowance for laying out a structure from a single bot position.
+     *
+     * <p>A 5-wide footprint spreads its far cells ~7 blocks diagonally from a
+     * bot standing at the structure's origin, which exceeds a player-like
+     * 5-block reach. The builder places a known layout rather than mimicking a
+     * player's arm, so it uses a larger limit instead of failing mid-build.
+     */
+    private static final double BUILD_REACH = 16.0;
+
     private StructureBuilder() {}
 
     /** Build {@code structureName} (wall/shelter/room) near the bot using {@code blockType}. */
@@ -46,15 +59,20 @@ public final class StructureBuilder {
     }
 
     private static String doBuild(ServerPlayer bot, String structureName, String blockType) {
-        // Anchor the structure on solid ground below the bot (if the bot is
-        // flying/creative and has no floor beneath it, placeBlock cannot find
-        // a surface to place against).
-        BlockPos ground = findGroundBelow(bot);
-        List<BlockPos> layout = layout(structureName, ground);
+        List<BlockPos> layout = layout(structureName, bot.blockPosition());
         if (layout == null) {
             return "❌ Unknown structure: " + structureName
                     + " (supported: wall, shelter, room).";
         }
+
+        // Level the site first. There is no terrain shape small enough for the
+        // catalog structures to fit on unchanged, so instead of refusing to
+        // build on uneven ground we clear the structure's own bounding volume:
+        // every remaining block in there would otherwise fail placement with
+        // "target position is already occupied". (An earlier version instead
+        // lifted the layout above the highest block in the footprint, which on a
+        // sloped cliff pushed the build out of reach and left it floating.)
+        clearVolume(bot, layout);
 
         int placed = 0;
         for (BlockPos pos : layout) {
@@ -62,7 +80,7 @@ public final class StructureBuilder {
             // supplyAsync), the same thread context the single-block placeBlock
             // tool already uses successfully. Each placement is awaited
             // sequentially — no server-thread blocking, so no deadlock.
-            String result = BlockPlacementTool.placeBlock(bot, pos, blockType).join();
+            String result = BlockPlacementTool.placeBlock(bot, pos, blockType, BUILD_REACH).join();
             if (!result.startsWith("✅")) {
                 return "❌ Build stopped after " + placed + "/" + layout.size()
                         + " blocks: " + result;
@@ -73,26 +91,62 @@ public final class StructureBuilder {
     }
 
     /**
-     * Find the anchor Y for the structure: the highest solid block in the
-     * footprint area, plus one (so the structure's floor sits on a clear plane
-     * above the terrain instead of colliding with it). If the bot is standing
-     * on flat ground, this is the ground-top; if floating, it scans downward.
+     * Clear every cell inside the bounding volume of {@code layout} (including
+     * the hollow interior and the door gap, so the result is a clean box rather
+     * than a box filled with whatever terrain was there).
+     *
+     * <p>Block edits are marshalled onto the server thread: this runs on the
+     * common ForkJoinPool, and mutating the world off-thread is unsafe.
      */
-    private static BlockPos findGroundBelow(ServerPlayer bot) {
-        BlockPos feet = bot.blockPosition();
-        int highest = feet.getY() - 30; // scan up to 30 blocks down
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                for (int dy = 0; dy <= 30; dy++) {
-                    BlockPos p = feet.offset(dx, -dy, dz);
-                    if (!bot.level().getBlockState(p).isAir()) {
-                        highest = Math.max(highest, p.getY());
-                        break; // found the surface in this column
+    private static void clearVolume(ServerPlayer bot, List<BlockPos> layout) {
+        if (layout.isEmpty()) return;
+        Level level = bot.level();
+        MinecraftServer server = bot.level().getServer();
+
+        int minX = layout.stream().mapToInt(BlockPos::getX).min().orElseThrow();
+        int maxX = layout.stream().mapToInt(BlockPos::getX).max().orElseThrow();
+        int minY = layout.stream().mapToInt(BlockPos::getY).min().orElseThrow();
+        int maxY = layout.stream().mapToInt(BlockPos::getY).max().orElseThrow();
+        int minZ = layout.stream().mapToInt(BlockPos::getZ).min().orElseThrow();
+        int maxZ = layout.stream().mapToInt(BlockPos::getZ).max().orElseThrow();
+
+        // Never clear the bot's own two body blocks, or it would fall.
+        BlockPos botFeet = bot.blockPosition();
+        BlockPos botHead = botFeet.above();
+
+        runOnServer(server, () -> {
+            for (int x = minX; x <= maxX; x++) {
+                for (int y = minY; y <= maxY; y++) {
+                    for (int z = minZ; z <= maxZ; z++) {
+                        BlockPos p = new BlockPos(x, y, z);
+                        if (p.equals(botFeet) || p.equals(botHead)) continue;
+                        if (!level.getBlockState(p).isAir()) {
+                            level.setBlockAndUpdate(p, Blocks.AIR.defaultBlockState());
+                        }
                     }
                 }
             }
+        });
+        LOGGER.info("Cleared build site {}..{} ({}x{}x{})",
+                new BlockPos(minX, minY, minZ), new BlockPos(maxX, maxY, maxZ),
+                maxX - minX + 1, maxY - minY + 1, maxZ - minZ + 1);
+    }
+
+    /** Run {@code task} on the server thread and wait for it to finish. */
+    private static void runOnServer(MinecraftServer server, Runnable task) {
+        if (server == null || server.isSameThread()) {
+            task.run();
+            return;
         }
-        return new BlockPos(feet.getX(), highest + 1, feet.getZ());
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                task.run();
+            } finally {
+                done.complete(null);
+            }
+        });
+        done.join();
     }
 
     /** Compute the block positions for a structure anchored near {@code origin}. */

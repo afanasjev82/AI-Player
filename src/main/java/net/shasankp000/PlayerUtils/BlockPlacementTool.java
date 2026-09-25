@@ -33,6 +33,21 @@ public class BlockPlacementTool {
      * @return CompletableFuture with result message
      */
     public static CompletableFuture<String> placeBlock(ServerPlayer bot, BlockPos targetPos, String blockType) {
+        return placeBlock(bot, targetPos, blockType, MAX_PLACEMENT_DISTANCE);
+    }
+
+    /**
+     * Places a block at the specified coordinates with an explicit reach limit.
+     *
+     * <p>Used by {@link StructureBuilder}, which lays out a whole structure
+     * around a single bot position: the far cells of a 5-wide footprint exceed
+     * a player-like 5-block reach, so the builder passes a larger limit rather
+     * than aborting mid-build.
+     *
+     * @param maxDistance maximum distance in blocks from the bot to the target
+     */
+    public static CompletableFuture<String> placeBlock(ServerPlayer bot, BlockPos targetPos,
+                                                       String blockType, double maxDistance) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Step 1: Normalize block type (add minecraft: prefix if missing)
@@ -42,9 +57,9 @@ public class BlockPlacementTool {
                 // Step 2: Check if bot is within placement range
                 Vec3 botPos = bot.position();
                 double distance = Math.sqrt(targetPos.distToCenterSqr(botPos));
-                if (distance > MAX_PLACEMENT_DISTANCE) {
+                if (distance > maxDistance) {
                     String error = String.format("❌ Too far from target position! Distance: %.2f blocks (max: %.2f)",
-                            distance, MAX_PLACEMENT_DISTANCE);
+                            distance, maxDistance);
                     LOGGER.warn(error);
                     return error;
                 }

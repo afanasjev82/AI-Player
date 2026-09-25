@@ -2311,6 +2311,20 @@ public class FunctionCallerV2 {
                 logger.info("✓ detectBlocks verification: assuming success (TODO: verify detection)");
                 return true;
 
+            case "build":
+                // StructureBuilder returns "✅ Built ..." on success and
+                // "❌ Build stopped after N/M blocks: ..." when a placement
+                // fails. Without this case a build that placed zero blocks fell
+                // through to `default`, which reported it as verified — a false
+                // success that hid the failure from the planner and the
+                // autonomous-learning reward.
+                if (functionOutput != null && functionOutput.startsWith("✅")) {
+                    logger.info("✓ build verification: {}", functionOutput);
+                    return true;
+                }
+                logger.warn("✗ build verification failed: {}", functionOutput);
+                return false;
+
             default:
                 // For other actions, assume success if no exception was thrown
                 logger.debug("✓ {} verification: default success", actionName);
@@ -2458,6 +2472,9 @@ public class FunctionCallerV2 {
 
         return switch (actionName.toLowerCase()) {
             case "searchblocks" -> true;
+            // A build that cannot place its blocks has produced nothing; treat it
+            // as critical so the plan fails loudly instead of reporting success.
+            case "build" -> true;
             default -> false;
         };
     }
