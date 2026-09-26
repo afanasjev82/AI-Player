@@ -473,6 +473,17 @@ public class AutonomousGoalEngine {
         LOGGER.info("[autonomous] Executing goal '{}' (priority={}, source={})",
                 entry.goalText(), entry.priority(), entry.source());
 
+        // Show the active task above the bot's head (e.g. "Paul [building]").
+        // Cleared on every exit path via finally, so a stale label never lingers.
+        BotStatusLabel.setStatus(botName, labelFor(entry.goalText()));
+        try {
+            doExecuteGoal(entry);
+        } finally {
+            BotStatusLabel.clear(botName);
+        }
+    }
+
+    private void doExecuteGoal(GoalQueueEntry entry) {
         String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
 
         // For WORLD_EVENT goals that are purely conversational, route through
@@ -525,6 +536,14 @@ public class AutonomousGoalEngine {
         }
 
         recordFailure(entry, skillKey, achieved);
+    }
+
+    /** Map a goal's text to a short visible task label (e.g. "building a house"). */
+    private static String labelFor(String goalText) {
+        if (goalText == null || goalText.isBlank()) return "thinking";
+        String t = goalText.trim();
+        if (t.length() > 28) t = t.substring(0, 28) + "…";
+        return t;
     }
 
     /**
