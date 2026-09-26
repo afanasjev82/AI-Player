@@ -42,6 +42,7 @@ import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.Entity.EntityDetails;
 
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.autonomous.BotStatusLabel;
 import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 
 import net.shasankp000.GameAI.State;
@@ -2032,6 +2033,12 @@ public class FunctionCallerV2 {
         logger.info("Executing plan: {}", plan.planId);
         logger.info("Plan has {} steps with total score: {}", plan.length(), plan.getTotalScore());
 
+        // Show each atomic step above the bot's head (e.g. "Paul [mining 2/4]").
+        // This covers BOTH the /bot plan path (handleUserGoal → executePlan) and
+        // the autonomous path (HybridPlanner.executeGoal → executePlan).
+        String statusBotName = botSource.getPlayer() != null
+                ? botSource.getPlayer().getName().getString() : null;
+
         // Create SharedState for inter-step communication
         Map<String, Object> sharedState = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -2061,6 +2068,11 @@ public class FunctionCallerV2 {
 
                 logger.info("🔧 Step {}/{}: Executing {} with params: {}",
                     stepIndex + 1, plan.steps.size(), step.actionName, params);
+
+                if (statusBotName != null) {
+                    BotStatusLabel.setStatus(statusBotName,
+                            stepLabel(step.actionName, stepIndex + 1, plan.steps.size()));
+                }
 
                 return callFunction(step.actionName, params, sharedState)
                     .thenCompose(result -> {
@@ -2134,6 +2146,9 @@ public class FunctionCallerV2 {
         }
 
         return sequentialExecution.handle((result, ex) -> {
+            if (statusBotName != null) {
+                BotStatusLabel.clear(statusBotName);
+            }
             if (ex != null) {
                 logger.error("Plan execution failed: {}", ex.getMessage());
                 return false;
@@ -2142,6 +2157,31 @@ public class FunctionCallerV2 {
                 return true;
             }
         });
+    }
+
+    /** Map an atomic action name to a short human verb, plus step progress. */
+    private static String stepLabel(String actionName, int index, int total) {
+        String verb = switch (actionName.toLowerCase()) {
+            case "goto", "movetocoordinates", "chartpathtoblock" -> "walking";
+            case "searchblocks", "detectblocks" -> "searching";
+            case "mineblock", "breakblock" -> "mining";
+            case "placeblock" -> "placing blocks";
+            case "build" -> "building";
+            case "craft" -> "crafting";
+            case "farm", "farmtill", "farmplant", "farmharvest" -> "farming";
+            case "combat" -> "fighting";
+            case "collect" -> "collecting";
+            case "terraform" -> "terraforming";
+            case "searchflatsite" -> "finding a site";
+            case "look", "turn" -> "looking";
+            case "trade" -> "trading";
+            case "equiparmor" -> "equipping";
+            default -> actionName.toLowerCase();
+        };
+        if (total > 1) {
+            return verb + " (" + index + "/" + total + ")";
+        }
+        return verb;
     }
 
     /**
