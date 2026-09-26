@@ -34,6 +34,7 @@ import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.ThreatEvaluator;
 import net.shasankp000.GameAI.autonomous.AutonomousManager;
+import net.shasankp000.GameAI.autonomous.AutonomousGoalEngine;
 import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.PathFinding.BotStance;
 import net.shasankp000.PathFinding.ChartPathToBlock;
@@ -158,6 +159,25 @@ public class modCommandRegistry {
                                         .then(literal("particles")
                                                 .then(Commands.argument("enabled", BoolArgumentType.bool())
                                                         .executes(context -> navigationDebugParticles(context)))))
+                        )
+                        // ----------------------------------------------------------------
+                        // /bot autonomy <bot> <pause|resume|status>
+                        //
+                        // pause  — halts the bot's autonomous goal loop (so a manual
+                        //          /bot plan isn't undermined by the background loop
+                        //          racing for the same inventory/attention).
+                        // resume — lets the autonomous loop run again.
+                        // status — reports whether the loop is currently paused.
+                        // ----------------------------------------------------------------
+                        .then(literal("autonomy")
+                                .then(Commands.argument("bot", EntityArgument.player())
+                                        .then(Commands.argument("mode", StringArgumentType.string())
+                                                .executes(context -> {
+                                                    autonomyToggle(context);
+                                                    return 1;
+                                                })
+                                        )
+                                )
                         )
                         // ----------------------------------------------------------------
                         // /bot stance <bot> <stay|follow|cancel> [targetPlayerName]
@@ -1548,6 +1568,41 @@ public class modCommandRegistry {
                         NavigationOptions.of(requestedSprint))
                 .thenAccept(result -> server.execute(() ->
                         ChatUtils.sendSystemMessage(context.getSource(), result.message())));
+    }
+
+    /**
+     * Handles {@code /bot autonomy <bot> <pause|resume|status>}: toggles the
+     * autonomous goal loop so a manual {@code /bot plan} isn't undermined by
+     * the background loop racing for the same inventory and attention.
+     */
+    private static void autonomyToggle(CommandContext<CommandSourceStack> context)
+            throws CommandSyntaxException {
+        ServerPlayer bot = EntityArgument.getPlayer(context, "bot");
+        String mode = StringArgumentType.getString(context, "mode").toLowerCase();
+        String botName = bot.getName().getString();
+
+        switch (mode) {
+            case "pause" -> {
+                AutonomousManager.getInstance().setPlayerControlled(botName, true);
+                context.getSource().sendSystemMessage(Component.literal(
+                        "⏸ Paused autonomous loop for " + botName + " (manual commands now take over)"));
+            }
+            case "resume" -> {
+                AutonomousManager.getInstance().setPlayerControlled(botName, false);
+                context.getSource().sendSystemMessage(Component.literal(
+                        "▶️ Resumed autonomous loop for " + botName));
+            }
+            case "status" -> {
+                boolean running = AutonomousManager.getInstance().isRunning(botName);
+                AutonomousGoalEngine engine = AutonomousManager.getInstance().getEngine(botName);
+                boolean paused = engine != null && engine.isPlayerControlled();
+                context.getSource().sendSystemMessage(Component.literal(
+                        botName + " autonomous loop: " + (running ? (paused ? "PAUSED" : "running")
+                                : "not registered")));
+            }
+            default -> context.getSource().sendSystemMessage(Component.literal(
+                    "Usage: /bot autonomy <bot> <pause|resume|status>"));
+        }
     }
 
     private static int navigationDebugStatus(CommandContext<CommandSourceStack> context)
