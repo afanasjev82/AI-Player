@@ -87,6 +87,13 @@ public class EmbeddingProviderFactory {
                         apiKey = "";
                     }
 
+                    // Ollama's OpenAI-compatible endpoint (localhost:11434/v1) only
+                    // serves models it has pulled (nomic-embed-text here), not the
+                    // OpenAI ada-002 default below. Detect it and use the local model.
+                    if (isOllamaEndpoint(endpoint)) {
+                        embeddingModel = "nomic-embed-text";
+                    }
+
                     LOGGER.info("✅ Using custom OpenAI-compatible embedding endpoint: {}", endpoint);
                     LOGGER.info("✅ Using embedding model: {}", embeddingModel);
                     return new EmbeddingProvider(
@@ -124,5 +131,19 @@ public class EmbeddingProviderFactory {
                     "text-embedding-ada-002";
             default -> "text-embedding-3-small";
         };
+    }
+
+    /**
+     * Heuristic: an endpoint on localhost port 11434 is the Ollama OpenAI-compatible
+     * API, which serves only pulled Ollama models (nomic-embed-text), not the OpenAI
+     * ada-002 name the generic default picks.
+     */
+    private static boolean isOllamaEndpoint(String endpoint) {
+        if (endpoint == null) {
+            return false;
+        }
+        String lower = endpoint.toLowerCase();
+        return lower.contains(":11434") || lower.contains("localhost") && lower.contains("11434")
+                || lower.contains("ollama");
     }
 }

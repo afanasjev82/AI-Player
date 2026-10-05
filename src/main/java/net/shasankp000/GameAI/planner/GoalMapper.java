@@ -1,6 +1,9 @@
 package net.shasankp000.GameAI.planner;
 
 import net.shasankp000.AIPlayer;
+import net.shasankp000.ChatUtils.Classifier.ClassificationResult;
+import net.shasankp000.ChatUtils.Classifier.GoalClassifier;
+import net.shasankp000.ChatUtils.Classifier.GoalClassifierFactory;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import org.slf4j.Logger;
@@ -111,6 +114,18 @@ public class GoalMapper {
     public static short parseGoal(String naturalLanguageGoal) {
         if (naturalLanguageGoal == null || naturalLanguageGoal.isEmpty()) {
             return GOAL_UNKNOWN;
+        }
+
+        // External classifier (Laya / Jev-compatible) when aiplayer.classifier=laya.
+        // Answers in a single forward pass; falls back to the token scorer below
+        // when disabled or when it returns nothing usable.
+        GoalClassifier external = GoalClassifierFactory.create();
+        if (external != null) {
+            short externalId = classifyExternally(external, naturalLanguageGoal);
+            if (externalId != GOAL_UNKNOWN) {
+                return externalId;
+            }
+            LOGGER.warn("Laya goal classifier returned no usable goal; falling back to token scorer + edge LLM.");
         }
 
         // Step 1 — normalise with SynonymMap, then score tokens
@@ -335,5 +350,40 @@ public class GoalMapper {
 
     public static boolean isValidGoal(short goalId) {
         return GOAL_ID_TO_NAME.containsKey(goalId);
+    }
+
+    /**
+     * Run an external goal classifier and map its label onto a goal id.
+     * Returns {@link #GOAL_UNKNOWN} on any failure so callers fall back
+     * without crashing.
+     */
+    private static short classifyExternally(GoalClassifier classifier, String goalText) {
+        try {
+            ClassificationResult result = classifier.classify(goalText);
+            if (result == null || result.label() == null || result.label().isBlank()) {
+                return GOAL_UNKNOWN;
+            }
+            short id = goalIdByName(result.label().trim());
+            if (id != GOAL_UNKNOWN) {
+                LOGGER.info("Laya classified goal '{}' → {} ({})",
+                        goalText, getGoalName(id), String.format("%.2f", result.confidence()));
+                return id;
+            }
+            LOGGER.warn("Laya returned unsupported goal label '{}'", result.label());
+            return GOAL_UNKNOWN;
+        } catch (Exception e) {
+            LOGGER.error("External goal classifier error: {}", e.getMessage());
+            return GOAL_UNKNOWN;
+        }
+    }
+
+    /** Map a goal name (e.g. {@code mine}) to its id, case-insensitively. */
+    private static short goalIdByName(String name) {
+        for (short id : getAllGoalIds()) {
+            if (getGoalName(id).equalsIgnoreCase(name)) {
+                return id;
+            }
+        }
+        return GOAL_UNKNOWN;
     }
 }

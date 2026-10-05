@@ -1,15 +1,11 @@
 package net.shasankp000.ChatUtils;
 
-import ai.djl.modality.Classifications;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import net.fabricmc.loader.api.FabricLoader;
-import net.shasankp000.AIPlayer;
-import net.shasankp000.ChatUtils.CART.CartClassifier;
-import net.shasankp000.ChatUtils.DecisionResolver.DecisionResolver;
-import net.shasankp000.ChatUtils.LIDSNetModel.LIDSNetModelManager;
+import net.shasankp000.ChatUtils.Classifier.BertEnsembleClassifier;
+import net.shasankp000.ChatUtils.Classifier.ClassificationResult;
+import net.shasankp000.ChatUtils.Classifier.IntentClassifier;
+import net.shasankp000.ChatUtils.Classifier.IntentClassifierFactory;
 import net.shasankp000.ChatUtils.PreProcessing.NLPModelSetup;
-import net.shasankp000.ChatUtils.PreProcessing.OpenNLPProcessor;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import org.slf4j.Logger;
@@ -434,214 +430,52 @@ public class NLPProcessor {
     // -------------------------------
 
     public static Intent getIntention(String userPrompt) {
-        Path configDir = FabricLoader.getInstance().getConfigDir();
-        Path modelDir = configDir.resolve("ai-player/NLPModels");
-        Path cartDir = modelDir.resolve("cart_files");
-        Path vocabFilePath = cartDir.resolve("cart_vectorizer_vocab.json");
-        Path labelsFilePath = cartDir.resolve("cart_class_labels.json");
-        Path treeFilePath = cartDir.resolve("cart_tree.json");
-        Path openNlpModelsDir = modelDir.resolve("OpenNLPModels");
-        Path LidsNetModelDir = modelDir.resolve("LIDSNet_torchscript/");
+        // The configured classifier: Laya (Jev-compatible) when
+        // aiplayer.classifier=laya, else the built-in BERT+CART+LIDSNet ensemble.
+        IntentClassifier primary = IntentClassifierFactory.create();
 
-        double bertClassificationConfidence = 0;
-        double cartClassificationConfidence = 0;
-        double LIDSNetClassificationConfidence = 0;
-
-        CartClassifier cartClassifier = null;
-
-        try {
-            File vocabFile = vocabFilePath.toFile();
-            File labelFile = labelsFilePath.toFile();
-            File treeFile = treeFilePath.toFile();
-
-            cartClassifier = new CartClassifier(treeFile, labelFile, vocabFile);
-        } catch (IOException e) {
-            LOGGER.error("Error initializing CART classifier! {}", e.getMessage());
+        Intent result = classifyAndParse(primary, userPrompt);
+        if (result != Intent.UNSPECIFIED) {
+            return result;
         }
 
-
-        String bertLabel = null;
-        String cartLabel = null;
-        String LIDSNetLabel = null;
-        String decision = null;
-
-        try {
-            Classifications intent = AIPlayer.modelManager.predict(userPrompt);
-            if (intent != null) {
-                bertLabel = intent.best().getClassName();
-                bertClassificationConfidence = intent.best().getProbability();
-
-                LOGGER.info("BERT predicted: {} with confidence: {}", bertLabel, bertClassificationConfidence);
-            }
-        } catch (Exception e) {
-            LOGGER.error("Error predicting intent using BERT: {}", e.getMessage());
-        }
-
-        try {
-            if (cartClassifier != null) {
-                CartClassifier.ClassificationResult result = cartClassifier.classify(userPrompt);
-                cartLabel = result.label;
-                cartClassificationConfidence = result.confidence;
-
-                LOGGER.info("CART predicted: {} with confidence: {}", cartLabel, cartClassificationConfidence);
-            }
-            else {
-                throw new Exception("CART classifier is null!");
-            }
-
-        } catch (Exception e) {
-            LOGGER.error("Error predicting intent using CART: {}", e.getMessage());
-        }
-
-        try {
-
-            // --- 1. Load Feature Map JSON ---
-            ObjectMapper mapper = new ObjectMapper();
-            Path actualLidsNetModelDir = LidsNetModelDir.resolve("LIDSNet_torchscript/");
-            JsonNode root = mapper.readTree(new File(actualLidsNetModelDir.resolve("lidsnet_feature_map.json").toString()));
-
-            // Class label index map
-            TreeMap<Integer, String> classIdxMap = new TreeMap<>();
-            root.get("idx2label").fields().forEachRemaining(entry ->
-                    classIdxMap.put(Integer.parseInt(entry.getKey()), entry.getValue().asText())
-            );
-            List<String> classNames = new ArrayList<>(classIdxMap.values());
-
-            // Feature names
-            List<String> featureNames = new ArrayList<>();
-            root.get("features").forEach(f -> featureNames.add(f.asText()));
-
-            // --- 2. Initialize NLP processor ---
-            OpenNLPProcessor openNLP = new OpenNLPProcessor(openNlpModelsDir.toString());
-
-            // --- 3. Analyze user input ---
-            List<OpenNLPProcessor.TokenInfo> tokens = openNLP.analyze(userPrompt);
-
-            // --- 4. Build symbolic feature set ---
-            Set<String> presentFeatures = new HashSet<>();
-            for (OpenNLPProcessor.TokenInfo token : tokens) {
-                presentFeatures.add("POS=" + token.posTag);
-                presentFeatures.add("lemma=" + token.lemma);
-            }
-
-            // --- 5. Construct input vector ---
-            float[] inputVector = new float[featureNames.size()];
-            for (int i = 0; i < featureNames.size(); i++) {
-                inputVector[i] = presentFeatures.contains(featureNames.get(i)) ? 1.0f : 0.0f;
-            }
-
-            // --- 6. Classify ---
-            LIDSNetModelManager lidsNet = LIDSNetModelManager.getInstance(actualLidsNetModelDir);
-            lidsNet.loadModel(classNames);
-            LIDSNetModelManager.PredictionResult pred = lidsNet.predictWithConfidence(inputVector, classNames);
-
-            // --- 7. Output
-            System.out.printf("[LIDSNet Classifier] Sentence: \"%s\"\nPredicted intent: %s (Confidence: %.2f%%)\n",
-                    userPrompt, pred.getClassName(), pred.getConfidencePercentage());
-
-            LIDSNetLabel = pred.getClassName();
-            LIDSNetClassificationConfidence = pred.getConfidencePercentage();
-
-
-        }
-        catch (Exception e) {
-            LOGGER.error("Error while running inference: {}", e.getMessage());
-        }
-
-
-
-        try {
-            DecisionResolver resolver = new DecisionResolver();
-            decision = resolver.resolveIntent(
-                    // Player message
-                    userPrompt,
-                    // BERT model
-                    bertLabel, bertClassificationConfidence,
-                    // Main CART
-                    cartLabel, cartClassificationConfidence,
-                    // LIDSNet
-                    LIDSNetLabel, LIDSNetClassificationConfidence
-            );
-        } catch (Exception e) {
-            LOGGER.error("Error while resolving the final decision: {}", e.getMessage());
-        }
-
-        Intent resolvedIntent = parseIntentOrUnspecified(decision);
-        if (resolvedIntent != Intent.UNSPECIFIED) {
-            return resolvedIntent;
-        }
-
-        Intent localFallback = chooseLocalClassifierFallback(
-                bertLabel, bertClassificationConfidence,
-                cartLabel, cartClassificationConfidence,
-                LIDSNetLabel, LIDSNetClassificationConfidence
-        );
-        if (localFallback != Intent.UNSPECIFIED) {
-            LOGGER.warn("Intent resolver did not return a usable decision. Using local classifier fallback: {}", localFallback);
-            return localFallback;
+        // If Laya was the primary and returned nothing usable (down server,
+        // malformed answer), fall back to the built-in ensemble so intent
+        // routing never bricks on an unavailable external service.
+        if (IntentClassifierFactory.isLayaEnabled()) {
+            LOGGER.warn("Laya classifier returned no usable intent; falling back to built-in ensemble.");
+            return classifyAndParse(new BertEnsembleClassifier(), userPrompt);
         }
 
         return Intent.UNSPECIFIED;
-
     }
 
-    private static Intent parseIntentOrUnspecified(String decision) {
-        if (decision == null || decision.isBlank()) {
-            LOGGER.warn("Intent resolver returned an empty decision. Falling back to UNSPECIFIED.");
+    /**
+     * Run a classifier and map its label onto the {@link Intent} enum.
+     * Returns {@link Intent#UNSPECIFIED} on any failure so the caller can
+     * fall back without crashing.
+     */
+    private static Intent classifyAndParse(IntentClassifier classifier, String userPrompt) {
+        if (classifier == null) {
             return Intent.UNSPECIFIED;
         }
-
-        String normalizedDecision = decision.trim();
         try {
-            return Intent.valueOf(normalizedDecision);
-        } catch (IllegalArgumentException e) {
-            LOGGER.warn("Intent resolver returned unsupported decision '{}'. Falling back to UNSPECIFIED.", normalizedDecision);
+            ClassificationResult result = classifier.classify(userPrompt);
+            if (result == null || result.label() == null || result.label().isBlank()) {
+                return Intent.UNSPECIFIED;
+            }
+            try {
+                Intent parsed = Intent.valueOf(result.label().trim());
+                LOGGER.info("Intent classifier → {} (confidence {})",
+                        parsed, String.format("%.2f", result.confidence()));
+                return parsed;
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Intent classifier returned unsupported label '{}'", result.label());
+                return Intent.UNSPECIFIED;
+            }
+        } catch (Exception e) {
+            LOGGER.error("Intent classifier error: {}", e.getMessage());
             return Intent.UNSPECIFIED;
-        }
-    }
-
-    private static Intent chooseLocalClassifierFallback(
-            String bertLabel, double bertConfidence,
-            String cartLabel, double cartConfidence,
-            String lidsNetLabel, double lidsNetConfidence
-    ) {
-        Intent bestIntent = Intent.UNSPECIFIED;
-        double bestConfidence = 0.0;
-
-        double normalizedBertConfidence = normalizeConfidence(bertConfidence);
-        if (normalizedBertConfidence > bestConfidence && isSupportedIntentLabel(bertLabel)) {
-            bestIntent = Intent.valueOf(bertLabel);
-            bestConfidence = normalizedBertConfidence;
-        }
-
-        double normalizedCartConfidence = normalizeConfidence(cartConfidence);
-        if (normalizedCartConfidence > bestConfidence && isSupportedIntentLabel(cartLabel)) {
-            bestIntent = Intent.valueOf(cartLabel);
-            bestConfidence = normalizedCartConfidence;
-        }
-
-        double normalizedLidsNetConfidence = normalizeConfidence(lidsNetConfidence);
-        if (normalizedLidsNetConfidence > bestConfidence && isSupportedIntentLabel(lidsNetLabel)) {
-            bestIntent = Intent.valueOf(lidsNetLabel);
-            bestConfidence = normalizedLidsNetConfidence;
-        }
-
-        return bestConfidence >= 0.60 ? bestIntent : Intent.UNSPECIFIED;
-    }
-
-    private static double normalizeConfidence(double confidence) {
-        return confidence > 1.0 ? confidence / 100.0 : confidence;
-    }
-
-    private static boolean isSupportedIntentLabel(String label) {
-        if (label == null || label.isBlank()) {
-            return false;
-        }
-        try {
-            Intent.valueOf(label.trim());
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
         }
     }
 
