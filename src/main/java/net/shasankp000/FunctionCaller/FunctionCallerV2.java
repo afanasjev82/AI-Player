@@ -365,6 +365,31 @@ public class FunctionCallerV2 {
         functionOutput = String.valueOf(method);
     }
 
+    /**
+     * Relay a completed function call back to chat so the requester sees the
+     * outcome. Reads the per-action {@code functionOutput} set by
+     * {@link #getFunctionOutput} (e.g. "✅ Crafted 1× stone_pickaxe.") and falls
+     * back to a generic confirmation for functions that report nothing. Clears
+     * {@code functionOutput} so the next action never relays a stale result.
+     */
+    private static void reportCompletion(String functionName, Map<String, String> paramMap) {
+        String result = functionOutput;
+        functionOutput = null;
+        String item = paramMap.get("item");
+        String message;
+        if (result != null && !result.isBlank()) {
+            message = result;
+        } else if (item != null && !item.isBlank()) {
+            message = "✅ " + functionName + " " + item + " completed";
+        } else {
+            message = "✅ " + functionName + " completed";
+        }
+        logger.info(message);
+        if (botSource != null) {
+            ChatUtils.sendChatMessages(botSource, message);
+        }
+    }
+
     private static class Tools {
         /** goTo tool: path finder + tracer **/
         private static void goTo(int x, int y, int z, boolean sprint) {
@@ -971,7 +996,7 @@ public class FunctionCallerV2 {
         String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
         String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
         try {
-            response = client.sendPrompt(fullSystemPrompt, userPrompt);
+            response = sendForAction(client, fullSystemPrompt, userPrompt);
             logger.info("Raw LLM Response: {}", response);
             if (response == null || response.isBlank() || response.startsWith("Error:")) {
                 logger.error("Function caller provider returned no usable response: {}", response);
@@ -985,6 +1010,36 @@ public class FunctionCallerV2 {
         } catch (Exception e) {
             logger.error("Error in Function Caller: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Send the action-planning prompt to the LLM. For a local Ollama endpoint
+     * (the "custom" provider pointed at :11434) this routes through the NATIVE
+     * /api/chat with {@code think:false} + {@code format:json}, because the
+     * OpenAI-compatible endpoint ignores {@code think:false} and so a reasoning
+     * model (qwen3) emits slow chain-of-thought prose instead of the function
+     * JSON. Every other provider keeps the standard {@link LLMClient#sendPrompt}.
+     */
+    private static String sendForAction(LLMClient client, String fullSystemPrompt, String userPrompt) {
+        String customUrl = AIPlayer.CONFIG.getCustomApiUrl();
+        if (customUrl != null && !customUrl.isBlank()
+                && (customUrl.contains("11434") || customUrl.toLowerCase().contains("ollama"))) {
+            try {
+                List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
+                String content = net.shasankp000.OllamaClient.OllamaAPIHelper.chatJson(
+                        "http://localhost:11434",
+                        AIPlayer.CONFIG.getSelectedLanguageModel(),
+                        messages
+                ).getContent();
+                logger.info("Routed action planning through native Ollama JSON chat");
+                return content;
+            } catch (Exception e) {
+                logger.warn("Native Ollama JSON chat failed ({}); falling back to the OpenAI-compatible client", e.getMessage());
+            }
+        }
+        return client.sendPrompt(fullSystemPrompt, userPrompt);
     }
 
     private static String extractJson(String response) {
@@ -1744,6 +1799,7 @@ public class FunctionCallerV2 {
                             } else {
                                 getFunctionOutput(result.functionMessage());
                             }
+                            reportCompletion(functionName, paramMap);
                             return null;
                         });
             } catch (Exception e) {
@@ -2012,6 +2068,7 @@ public class FunctionCallerV2 {
             }
 
             logger.info("✓ Function {} execution completed", functionName);
+            reportCompletion(functionName, paramMap);
         });
     }
 

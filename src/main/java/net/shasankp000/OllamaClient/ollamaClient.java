@@ -146,12 +146,24 @@ public class ollamaClient {
             server.getCommands().performPrefixedCommand(botSource, "/say Processing your message, please wait.");
         });
 
+        // Immediate ack to the command source (console/RCON). The action runs
+        // asynchronously and reports to in-game chat, so without this the
+        // console sees no output at all.
+        playerSource.sendSystemMessage(Component.literal("§7[AI-Player] " + botName + " → " + message));
+
         // Pause autonomous loop while the command message is handled
         AutonomousManager.getInstance().setPlayerControlled(botName, true);
 
+        // RCON / console has no player: a playerSource without an entity is a
+        // console source, and playerSource.getPlayer() is null there. Resolve
+        // the UUID null-safely so a console-sent message still routes instead
+        // of NPE-ing before the intent classifier runs.
+        ServerPlayer sender = playerSource.getPlayer();
+        UUID senderUUID = sender != null ? sender.getUUID() : null;
+
         BOT_TASK_POOL.submit(() -> {
             try {
-                routeIntent(message, botSource, Objects.requireNonNull(playerSource.getPlayer()).getUUID());
+                routeIntent(message, botSource, senderUUID);
             } catch (Exception e) {
                 LOGGER.error("NLP error: ", e);
                 ChatUtils.sendChatMessages(botSource, "\u26a0\ufe0f NLP issue. Report to developer.");
@@ -185,6 +197,9 @@ public class ollamaClient {
                 BOT_TASK_POOL.submit(() -> {
                     Thread.currentThread().setName("Function-Caller-Worker");
                     LOGGER.info("\uD83E\uDDF5 Started FunctionCallerV2 worker thread");
+                    // playerUUID may be null for a console-sent message; the
+                    // clarification flow is skipped in that case (no player to
+                    // clarify with), but the action still executes.
                     new FunctionCallerV2(botSource, playerUUID);
                     if (configuredClient != null) {
                         FunctionCallerV2.run(message, configuredClient);

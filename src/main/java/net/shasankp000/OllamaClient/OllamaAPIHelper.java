@@ -89,6 +89,41 @@ public class OllamaAPIHelper {
     }
 
     /**
+     * Native /api/chat call forcing JSON output with thinking DISABLED — the only
+     * combination that makes a reasoning model (qwen3) return fast, machine-parsable
+     * JSON. The OpenAI-compatible endpoint ignores `think:false` (and `format`),
+     * so structured action calls must go through this native path.
+     */
+    public static OllamaThinkingResponse chatJson(
+            String host,
+            String model,
+            List<OllamaChatMessage> messages) throws IOException, InterruptedException {
+        JsonObject requestJson = new JsonObject();
+        requestJson.addProperty("model", model);
+        requestJson.add("messages", gson.toJsonTree(messages));
+        requestJson.addProperty("stream", false);
+        requestJson.addProperty("think", false);
+        requestJson.addProperty("format", "json");
+
+        String endpoint = host + "/api/chat";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestJson.toString()))
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            LOGGER.error("❌ Ollama API error: HTTP {}", response.statusCode());
+            throw new IOException("Ollama API returned status: " + response.statusCode());
+        }
+        JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+        JsonObject message = responseJson.getAsJsonObject("message");
+        String content = message.has("content") ? message.get("content").getAsString() : "";
+        String thinking = message.has("thinking") ? message.get("thinking").getAsString() : null;
+        return new OllamaThinkingResponse(content, thinking);
+    }
+
+    /**
      * Fallback method that uses standard OllamaAPI for non-thinking models
      * or when thinking mode is not needed
      *
