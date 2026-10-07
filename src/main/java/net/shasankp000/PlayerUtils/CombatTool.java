@@ -35,6 +35,15 @@ public final class CombatTool {
     /** Beyond this distance a melee swing whiffs; navigate closer instead. */
     private static final double MELEE_REACH = 4.0;
 
+    /**
+     * Beyond this vertical drop (blocks) a walking descent is impossible:
+     * PathFinder's DROP transition caps at ~3 blocks, so a hostile at the base
+     * of a taller cliff (e.g. the spawn cliff, y~136 vs y~110) has no route to
+     * the bot. Combat skips pursuing such targets instead of churning a doomed
+     * pursuit every cooldown tick.
+     */
+    public static final double MAX_SAFE_DROP = 4.0;
+
     private CombatTool() {}
 
     /**
@@ -110,6 +119,13 @@ public final class CombatTool {
         // suspension is active. Do NOT re-issue while a COMBAT pursuit is
         // already in flight.
         if (distance > MELEE_REACH) {
+            // Terrain gate: a target at the base of a cliff (far below the bot)
+            // is unreachable by walking — PathFinder can't descend a drop deeper
+            // than ~3 blocks. Don't issue a doomed pursuit for it.
+            if (isTargetBelowUnreachableCliff(bot, target)) {
+                return "Target at the base of an unreachable cliff ("
+                        + String.format("%.1f", bot.getY() - target.getY()) + "m below) — skipping melee";
+            }
             if (!NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
                 NavigationService.navigateToEntity(bot,
                         () -> target.isAlive() && !target.isRemoved() ? target.blockPosition() : null,
@@ -160,6 +176,21 @@ public final class CombatTool {
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * True when the target is far enough below the bot that a walking descent is
+     * impossible ({@value #MAX_SAFE_DROP} blocks): the mob fell off a cliff and
+     * PathFinder has no route down to it. A cheap pre-filter before issuing a
+     * pursuit, so the bot doesn't repeatedly chase a ghost position.
+     */
+    public static boolean isTargetBelowUnreachableCliff(ServerPlayer bot, Entity target) {
+        return bot != null && target != null && isBelowUnreachableCliff(bot.getY(), target.getY());
+    }
+
+    /** Pure-Y variant of {@link #isTargetBelowUnreachableCliff} for unit testing. */
+    public static boolean isBelowUnreachableCliff(double botY, double targetY) {
+        return botY - targetY > MAX_SAFE_DROP;
+    }
 
     /**
      * Mirror of {@code AutoFaceEntity}'s hostile filter: mobs ({@link Monster}

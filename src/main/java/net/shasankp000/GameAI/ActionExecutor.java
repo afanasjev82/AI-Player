@@ -13,6 +13,7 @@ import net.shasankp000.Entity.AutoFaceEntity;
 import net.shasankp000.Entity.FaceClosestEntity;
 import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
 import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationResult;
 import net.shasankp000.PathFinding.NavigationService;
 import net.shasankp000.PathFinding.SuspensionReason;
 import net.shasankp000.PlayerUtils.*;
@@ -78,6 +79,10 @@ public final class ActionExecutor {
     /** Throttle for the melee approach navigation (the autoface tick re-invokes combat every ~33ms). */
     private static volatile long lastApproachAt = 0L;
     private static final long APPROACH_COOLDOWN_MS = 1500L;
+
+    /** When the last COMBAT pursuit ended with no route (cliff/wall), back off re-issuing. */
+    private static volatile long lastApproachNoPathAt = 0L;
+    private static final long APPROACH_FAIL_BACKOFF_MS = 5000L;
 
     private ActionExecutor() {
     }
@@ -361,7 +366,20 @@ public final class ActionExecutor {
                             completeAction(botName);
                             break;
                         }
+                        // Terrain gate: skip a target at the base of a cliff
+                        // (PathFinder can't descend >~3 blocks), and back off
+                        // after a recent no-path pursuit instead of re-churning.
                         long now = System.currentTimeMillis();
+                        if (CombatTool.isTargetBelowUnreachableCliff(bot, attackTarget)) {
+                            // Silent skip: an unreachable cliff target re-armed every
+                            // autoface tick, so logging here would spam ~30 lines/sec.
+                            completeAction(botName);
+                            break;
+                        }
+                        if (now - lastApproachNoPathAt < APPROACH_FAIL_BACKOFF_MS) {
+                            completeAction(botName);
+                            break;
+                        }
                         if (now - lastApproachAt >= APPROACH_COOLDOWN_MS) {
                             lastApproachAt = now;
                             System.out.println("Approaching " + attackTarget.getName().getString()
@@ -369,7 +387,17 @@ public final class ActionExecutor {
                             Entity target = attackTarget;
                             NavigationService.navigateToEntity(bot,
                                     () -> target.isAlive() && !target.isRemoved() ? target.blockPosition() : null,
-                                    NavigationOptions.of(true), SuspensionReason.COMBAT);
+                                    NavigationOptions.of(true), SuspensionReason.COMBAT)
+                                .whenComplete((result, err) -> {
+                                    if (result != null
+                                            && (result.status() == NavigationResult.Status.NO_PATH
+                                                || result.status() == NavigationResult.Status.INVALID_GOAL
+                                                || result.status() == NavigationResult.Status.STUCK)) {
+                                        lastApproachNoPathAt = System.currentTimeMillis();
+                                        LOGGER.info("[combat] pursuit ended {} — backing off approach for {}s",
+                                                result.status(), APPROACH_FAIL_BACKOFF_MS / 1000);
+                                    }
+                                });
                         }
                         completeAction(botName);
                         break;
