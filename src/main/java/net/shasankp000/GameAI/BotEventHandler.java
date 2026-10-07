@@ -21,6 +21,8 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.shasankp000.Entity.FaceClosestEntity;
 import net.shasankp000.LauncherDetection.LauncherEnvironment;
+import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 import net.shasankp000.PlayerUtils.*;
 import net.shasankp000.WorldUitls.GetTime;
 import net.shasankp000.Entity.EntityDetails;
@@ -763,6 +765,16 @@ public class BotEventHandler {
         try {
             CommandSourceStack botSource = bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
 
+            // Single combat owner: while a COMBAT approach navigation is in
+            // flight (the deterministic path is closing distance to a target),
+            // hold the decision. The RL policy re-runs every autoface tick and
+            // can flip ATTACK→EVADE, whose raw `/player move forward` cancels
+            // the approach navigation and makes the bot flee mid-engagement.
+            // Once the approach reaches (or fails), this guard lifts and the
+            // policy may act again.
+            if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
+                return;
+            }
 
             if (qTable == null) {
                 // No Q-table at all: skip the (empty) RL path and fight back

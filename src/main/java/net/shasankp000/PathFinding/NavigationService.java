@@ -122,6 +122,22 @@ public final class NavigationService {
         return session != null && !isSuspended(session);
     }
 
+    /**
+     * True while the bot has an in-flight navigation that belongs to the given
+     * {@link SuspensionReason} owner — i.e. a combat approach ({@link
+     * SuspensionReason#COMBAT}) or a tool override. Lets the combat decision
+     * layer hold its choice: once a COMBAT approach is running, the policy must
+     * not re-decide (and flip to EVADE) until that navigation resolves, or the
+     * two paths race and the raw {@code /player move forward} evasion cancels
+     * the approach mid-flight.
+     */
+    public static boolean isNavigatingFor(UUID botId, SuspensionReason owner) {
+        NavigationSession session = SESSIONS.get(botId);
+        if (session == null) return false;
+        if (session.override != null) return session.override.owner == owner;
+        return session.standaloneSuspensionOwner == owner;
+    }
+
     public static boolean isAnyNavigating() {
         return !SESSIONS.isEmpty();
     }
