@@ -932,12 +932,23 @@ public class RLAgent {
                     // Calculate total threat level
                     double totalThreat = projectileThreatRisk + entityThreatRisk;
                     double botHealth = currentState.getBotHealth();
-                    boolean hasWeapons = (currentState.getSelectedItem().contains("Bow") ||
-                                         currentState.getSelectedItem().contains("Crossbow") ||
-                                         currentState.getSelectedItem().contains("Sword")) &&
-                                         (currentState.getHotBarItems().stream()
-                                             .anyMatch(item -> item.toLowerCase().contains("arrow")) ||
-                                          currentState.getSelectedItem().contains("Sword"));
+                    // Mirror SHOOT_ARROW's hotbar-aware weapon detection: a melee
+                    // weapon (sword/axe) in ANY hotbar slot counts as armed, not
+                    // just the currently selected slot. The old check read only
+                    // getSelectedItem(), so a bot holding planks/axe (or an empty
+                    // hand) was scored "Unarmed" and evaded even with a sword in
+                    // another slot. A ranged weapon only counts with arrows.
+                    // NOTE: getSelectedItem() is the HOVER NAME ("Iron Sword"),
+                    // while getHotBarItems() are lowercase item IDs ("iron_sword"),
+                    // so matching must be case-insensitive.
+                    String selectedLower = currentState.getSelectedItem().toLowerCase();
+                    boolean evadeHasMeleeWeapon = selectedLower.contains("sword") || selectedLower.contains("axe") ||
+                                                  currentState.getHotBarItems().stream().anyMatch(item ->
+                                                      item != null && (item.toLowerCase().contains("sword") || item.toLowerCase().contains("axe")));
+                    boolean evadeHasRangedWeapon = (selectedLower.contains("bow") || selectedLower.contains("crossbow")) &&
+                                                   currentState.getHotBarItems().stream()
+                                                       .anyMatch(item -> item != null && item.toLowerCase().contains("arrow"));
+                    boolean hasWeapons = evadeHasMeleeWeapon || evadeHasRangedWeapon;
 
                     if (totalThreat > 0 || botHealth < 10.0) {
                         // Base evasion calculation
