@@ -341,6 +341,18 @@ public final class ActionExecutor {
                     // so the swing lands instead of whiffing at a distant mob.
                     // Capped at APPROACH_RANGE: beyond that the target is not a
                     // short chase, and ranged/evade handling should own it.
+
+                    // ⚔ AUTO-EQUIP the best melee weapon BEFORE closing distance
+                    // so the bot is "armed" while pursuing. Otherwise the RL
+                    // policy sees "Unarmed" mid-chase (e.g. hand is full of
+                    // planks) and flips ATTACK→EVADE, cancelling the pursuit.
+                    boolean weaponEquipped = net.shasankp000.PlayerUtils.WeaponUtils.equipBestMeleeWeapon(bot);
+                    if (weaponEquipped) {
+                        System.out.println("✓ Best melee weapon equipped for combat");
+                    } else {
+                        System.out.println("⚠ No melee weapon found, attacking with current item");
+                    }
+
                     if (distanceToTarget > MELEE_REACH && distanceToTarget <= APPROACH_RANGE) {
                         // PURSUE the live target (re-aims as it moves) rather
                         // than chasing a stale coordinate. Do NOT re-issue while
@@ -364,14 +376,6 @@ public final class ActionExecutor {
                     }
 
                     System.out.println("Using MELEE attack (close range or no ranged weapon)");
-
-                    // ⚔ AUTO-EQUIP BEST MELEE WEAPON (if not already holding one)
-                    boolean weaponEquipped = net.shasankp000.PlayerUtils.WeaponUtils.equipBestMeleeWeapon(bot);
-                    if (weaponEquipped) {
-                        System.out.println("✓ Best melee weapon equipped for combat");
-                    } else {
-                        System.out.println("⚠ No melee weapon found, attacking with current item");
-                    }
 
                     FaceClosestEntity.faceClosestEntity(bot, AutoFaceEntity.hostileEntities);
                     server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " attack");
