@@ -342,6 +342,15 @@ public final class ActionExecutor {
                     // Capped at APPROACH_RANGE: beyond that the target is not a
                     // short chase, and ranged/evade handling should own it.
                     if (distanceToTarget > MELEE_REACH && distanceToTarget <= APPROACH_RANGE) {
+                        // Do NOT re-issue an approach while one is already in
+                        // flight: navigateOverride REPLACES the current override,
+                        // so re-issuing every cooldown resets the path and the
+                        // bot never walks more than one cooldown interval. Issue
+                        // once, let it complete, then the swing lands in range.
+                        if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
+                            completeAction(botName);
+                            break;
+                        }
                         long now = System.currentTimeMillis();
                         if (now - lastApproachAt >= APPROACH_COOLDOWN_MS) {
                             lastApproachAt = now;
