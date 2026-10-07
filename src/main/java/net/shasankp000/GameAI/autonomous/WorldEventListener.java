@@ -151,6 +151,15 @@ public class WorldEventListener {
             BotStance.FOLLOW
         ),
 
+        // "come to me" / "come here" / "come over here"  -- approach the sender.
+        // Reuses FOLLOW: it navigates the bot to the player (fixing the old
+        // behaviour where the bot asked for XYZ coordinates) and then holds the
+        // bot within follow range of them.
+        new StanceTrigger(
+            Pattern.compile("\\bcome\\s+(to\\s+me|here|over\\s+here)\\b", Pattern.CASE_INSENSITIVE),
+            BotStance.FOLLOW
+        ),
+
         // "stay here" / "stop moving" / "stay put" / "don't move"
         new StanceTrigger(
             Pattern.compile("\\b(stay\\s+here|stop\\s+moving|stay\\s+put|don'?t\\s+move)\\b",

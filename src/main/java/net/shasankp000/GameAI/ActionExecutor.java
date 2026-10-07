@@ -1,6 +1,7 @@
 package net.shasankp000.GameAI;
 
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -11,6 +12,9 @@ import net.minecraft.world.phys.Vec3;
 import net.shasankp000.Entity.AutoFaceEntity;
 import net.shasankp000.Entity.FaceClosestEntity;
 import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
+import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 import net.shasankp000.PlayerUtils.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +63,21 @@ public final class ActionExecutor {
     // interval is plenty for a reactive self-defense response.
     private static volatile long lastCombatFallbackAt = 0L;
     private static final long COMBAT_FALLBACK_COOLDOWN_MS = 1000L; // 1 second
+
+    /** Beyond this distance a melee swing whiffs; approach the target instead. */
+    private static final double MELEE_REACH = 4.0;
+
+    /**
+     * Furthest distance the bot will actively chase a melee target. A hostile
+     * beyond this (e.g. a skeleton 28m away down a cliff) is unreachable by a
+     * short approach, so the bot should not walk toward it — ranged/evade
+     * handling owns that case instead.
+     */
+    private static final double APPROACH_RANGE = 12.0;
+
+    /** Throttle for the melee approach navigation (the autoface tick re-invokes combat every ~33ms). */
+    private static volatile long lastApproachAt = 0L;
+    private static final long APPROACH_COOLDOWN_MS = 1500L;
 
     private ActionExecutor() {
     }
@@ -318,7 +337,23 @@ public final class ActionExecutor {
                     // Wait for shoot to complete (with timeout)
                     waitForActionCompletion(botName, 3000); // 3 second max wait
                 } else {
-                    // MELEE ATTACK STRATEGY
+                    // MELEE ATTACK STRATEGY — approach first when out of reach,
+                    // so the swing lands instead of whiffing at a distant mob.
+                    // Capped at APPROACH_RANGE: beyond that the target is not a
+                    // short chase, and ranged/evade handling should own it.
+                    if (distanceToTarget > MELEE_REACH && distanceToTarget <= APPROACH_RANGE) {
+                        long now = System.currentTimeMillis();
+                        if (now - lastApproachAt >= APPROACH_COOLDOWN_MS) {
+                            lastApproachAt = now;
+                            System.out.println("Approaching " + attackTarget.getName().getString()
+                                    + " (out of melee reach)");
+                            NavigationService.navigateOverride(bot, attackTarget.blockPosition(),
+                                    NavigationOptions.of(true), SuspensionReason.COMBAT);
+                        }
+                        completeAction(botName);
+                        break;
+                    }
+
                     System.out.println("Using MELEE attack (close range or no ranged weapon)");
 
                     // ⚔ AUTO-EQUIP BEST MELEE WEAPON (if not already holding one)

@@ -6,6 +6,9 @@ import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.cubemob.Slime;
 import net.minecraft.world.entity.player.Player;
 import net.shasankp000.Entity.FaceClosestEntity;
+import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +31,9 @@ public final class CombatTool {
     private static final Logger LOGGER = LoggerFactory.getLogger("combat-tool");
 
     private static final double SEARCH_RADIUS = 8.0;
+
+    /** Beyond this distance a melee swing whiffs; navigate closer instead. */
+    private static final double MELEE_REACH = 4.0;
 
     private CombatTool() {}
 
@@ -97,6 +103,16 @@ public final class CombatTool {
         if (target == null) return "No hostile mobs within " + (int) radius + " blocks.";
 
         double distance = Math.sqrt(target.distanceToSqr(bot));
+
+        // Approach: if the target is beyond melee reach, navigate toward it
+        // (COMBAT override so the bot moves even while a THREAT suspension is
+        // active) and skip the swing — the next call, once close, lands the hit.
+        if (distance > MELEE_REACH) {
+            NavigationService.navigateOverride(bot, target.blockPosition(),
+                    NavigationOptions.of(true), SuspensionReason.COMBAT);
+            return "Approaching " + target.getName().getString()
+                    + " at " + String.format("%.1f", distance) + "m";
+        }
 
         // Arm with the best melee weapon we have (fists otherwise).
         boolean armed = WeaponUtils.equipBestMeleeWeapon(bot);
