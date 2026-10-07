@@ -10,5 +10,6 @@ public enum ReplanReason {
     STALL_RECOVERY,
     RESUMED,
     OVERRIDE_COMPLETED,
-    SURFACED
+    SURFACED,
+    MOVING_TARGET
 }

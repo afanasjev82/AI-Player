@@ -342,11 +342,9 @@ public final class ActionExecutor {
                     // Capped at APPROACH_RANGE: beyond that the target is not a
                     // short chase, and ranged/evade handling should own it.
                     if (distanceToTarget > MELEE_REACH && distanceToTarget <= APPROACH_RANGE) {
-                        // Do NOT re-issue an approach while one is already in
-                        // flight: navigateOverride REPLACES the current override,
-                        // so re-issuing every cooldown resets the path and the
-                        // bot never walks more than one cooldown interval. Issue
-                        // once, let it complete, then the swing lands in range.
+                        // PURSUE the live target (re-aims as it moves) rather
+                        // than chasing a stale coordinate. Do NOT re-issue while
+                        // a COMBAT pursuit is already in flight.
                         if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
                             completeAction(botName);
                             break;
@@ -356,7 +354,9 @@ public final class ActionExecutor {
                             lastApproachAt = now;
                             System.out.println("Approaching " + attackTarget.getName().getString()
                                     + " (out of melee reach)");
-                            NavigationService.navigateOverride(bot, attackTarget.blockPosition(),
+                            Entity target = attackTarget;
+                            NavigationService.navigateToEntity(bot,
+                                    () -> target.isAlive() && !target.isRemoved() ? target.blockPosition() : null,
                                     NavigationOptions.of(true), SuspensionReason.COMBAT);
                         }
                         completeAction(botName);

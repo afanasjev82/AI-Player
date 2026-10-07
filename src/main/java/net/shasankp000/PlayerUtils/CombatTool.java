@@ -104,14 +104,15 @@ public final class CombatTool {
 
         double distance = Math.sqrt(target.distanceToSqr(bot));
 
-        // Approach: if the target is beyond melee reach, navigate toward it
-        // (COMBAT override so the bot moves even while a THREAT suspension is
-        // active) and skip the swing — the next call, once close, lands the hit.
-        // Do NOT re-issue while a COMBAT approach is already in flight:
-        // navigateOverride replaces the current override, resetting the path.
+        // Approach: if the target is beyond melee reach, PURSUE it (navigate to
+        // its LIVE position, re-aiming as it moves) instead of chasing a stale
+        // coordinate. COMBAT owner so the bot moves even while a THREAT
+        // suspension is active. Do NOT re-issue while a COMBAT pursuit is
+        // already in flight.
         if (distance > MELEE_REACH) {
             if (!NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
-                NavigationService.navigateOverride(bot, target.blockPosition(),
+                NavigationService.navigateToEntity(bot,
+                        () -> target.isAlive() && !target.isRemoved() ? target.blockPosition() : null,
                         NavigationOptions.of(true), SuspensionReason.COMBAT);
             }
             return "Approaching " + target.getName().getString()

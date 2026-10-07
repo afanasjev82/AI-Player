@@ -41,12 +41,71 @@ public final class NavigationService {
     private static int planningCursor;
     private static int lastGlobalPlanningBudget;
 
+    /** How far a pursuit target must drift before the session re-aims (blocks). */
+    private static final double MOVING_TARGET_RETARGET_THRESHOLD = 2.0;
+
     private NavigationService() {}
 
     public static void register() {
         if (REGISTERED.compareAndSet(false, true)) {
             ServerTickEvents.END_SERVER_TICK.register(NavigationService::tick);
         }
+    }
+
+    /**
+     * Navigate toward a <em>moving</em> target (e.g. a hostile mob), re-aiming
+     * as the target relocates.
+     *
+     * <p>Unlike {@link #navigate}, the goal here is a supplier read on every
+     * server tick. When the supplied position drifts more than {@value
+     * #MOVING_TARGET_RETARGET_THRESHOLD} blocks, the session re-plans toward the
+     * fresh position WITHOUT terminating (a normal session's repeated-replan
+     * STUCK guard is disabled for moving-target sessions). The navigation ends
+     * only when the target dies/despawns (the supplier returns {@code null}, or
+     * the goal resolves to a non-air block) or the caller cancels it.
+     *
+     * @param owner the suspension owner (use {@link SuspensionReason#COMBAT} so
+     *              the pursuit proceeds even while a THREAT suspension is active).
+     */
+    public static CompletableFuture<NavigationResult> navigateToEntity(
+            ServerPlayer player, java.util.function.Supplier<BlockPos> targetSupplier,
+            NavigationOptions options, SuspensionReason owner) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(targetSupplier, "targetSupplier");
+        Objects.requireNonNull(options, "options");
+        MinecraftServer server = player.level().getServer();
+        CompletableFuture<NavigationResult> future = new CompletableFuture<>();
+        Runnable begin = () -> {
+            BlockPos first = targetSupplier.get();
+            if (first == null) {
+                future.complete(new NavigationResult(NavigationResult.Status.PLAYER_UNAVAILABLE,
+                        player.blockPosition(), "Pursuit target no longer exists"));
+                return;
+            }
+            NavigationSession previous = SESSIONS.get(player.getUUID());
+            if (previous != null) finish(previous, NavigationResult.Status.CANCELLED, "Replaced by a newer route");
+            if (!player.isAlive() || player.hasDisconnected()) {
+                future.complete(new NavigationResult(NavigationResult.Status.PLAYER_UNAVAILABLE,
+                        player.blockPosition(), "Player is unavailable"));
+                return;
+            }
+            NavigationSession session = new NavigationSession(player, first.immutable(), options,
+                    GENERATIONS.incrementAndGet(), future);
+            session.movingTarget = targetSupplier;
+            session.movingGoalLast = first.immutable();
+            session.standaloneSuspensionOwner = owner;
+            SESSIONS.put(player.getUUID(), session);
+            if (!isSuspended(session)) startPlanning(session, player, ReplanReason.INITIAL);
+        };
+        if (server == null) {
+            future.complete(new NavigationResult(NavigationResult.Status.PLAYER_UNAVAILABLE,
+                    player.blockPosition(), "Server unavailable"));
+        } else if (server.isSameThread()) {
+            begin.run();
+        } else {
+            server.execute(begin);
+        }
+        return future;
     }
 
     public static CompletableFuture<NavigationResult> navigate(ServerPlayer player, BlockPos goal,
@@ -264,6 +323,10 @@ public final class NavigationService {
                 continue;
             }
             session.lastPosition = player.blockPosition();
+
+            // Pursuit: re-aim at a moving target before doing anything else.
+            refreshMovingGoal(session, player);
+
             renderDebugRoute(session, player);
             if (player.isUnderWater() && player.getAirSupply() <= SURFACE_AIR_THRESHOLD) {
                 beginEmergencySurface(session, player);
@@ -283,6 +346,35 @@ public final class NavigationService {
             else tickMovement(session, player);
         }
         runPlanningRoundRobin(server, planners);
+    }
+
+    /**
+     * Re-aim a pursuit session at its moving target. Reads the target supplier
+     * each tick; when the target drifts more than {@value
+     * #MOVING_TARGET_RETARGET_THRESHOLD} blocks, updates the session goal and
+     * re-plans (a stale in-flight search is replaced). The session terminates
+     * only when the target is gone (supplier returns {@code null}).
+     */
+    private static void refreshMovingGoal(NavigationSession session, ServerPlayer player) {
+        if (session.movingTarget == null) return;
+        BlockPos fresh = session.movingTarget.get();
+        if (fresh == null) {
+            finish(session, NavigationResult.Status.REACHED, "Pursuit target no longer exists");
+            return;
+        }
+        fresh = fresh.immutable();
+        double drift = session.movingGoalLast == null
+                ? Double.MAX_VALUE
+                : Math.sqrt(fresh.distSqr(session.movingGoalLast));
+        if (drift < MOVING_TARGET_RETARGET_THRESHOLD) return;
+        session.movingGoalLast = fresh;
+        session.goal = fresh;
+        // Re-plan only when not already mid-search toward a now-stale goal.
+        // startPlanning replaces the search/path; the moving-target flag below
+        // disables the repeated-replan STUCK guard so this never self-terminates.
+        if (session.search == null) {
+            startPlanning(session, player, ReplanReason.MOVING_TARGET);
+        }
     }
 
     private static void renderDebugRoute(NavigationSession session, ServerPlayer player) {
@@ -527,7 +619,9 @@ public final class NavigationService {
 
     private static void startPlanning(NavigationSession session, ServerPlayer player, ReplanReason reason) {
         if (SESSIONS.get(session.botId) != session) return;
-        if (reason != ReplanReason.INITIAL && session.override == null) {
+        // A moving-target session re-plans as the target relocates; that is not
+        // "no progress" and must not trigger the repeated-replan STUCK guard.
+        if (reason != ReplanReason.INITIAL && session.override == null && session.movingTarget == null) {
             double distance = player.position().distanceTo(Vec3.atBottomCenterOf(session.goal));
             if (session.replans.record(distance, reason)) {
                 finish(session, NavigationResult.Status.STUCK,
@@ -685,7 +779,7 @@ public final class NavigationService {
         final UUID botId;
         final MinecraftServer server;
         final ResourceKey<Level> dimension;
-        final BlockPos goal;
+        BlockPos goal;
         final NavigationOptions options;
         final long generation;
         final CompletableFuture<NavigationResult> future;
@@ -710,6 +804,11 @@ public final class NavigationService {
         NavigationOverride override;
         SuspensionReason standaloneSuspensionOwner;
         BlockPos lastPosition;
+
+        /** Non-null for pursuit sessions: supplies the target's live position. */
+        java.util.function.Supplier<BlockPos> movingTarget;
+        /** Last position the pursuit session re-aimed at (retarget threshold). */
+        BlockPos movingGoalLast;
 
         NavigationSession(ServerPlayer player, BlockPos goal, NavigationOptions options, long generation,
                           CompletableFuture<NavigationResult> future) {
