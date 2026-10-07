@@ -31,16 +31,34 @@ public final class ThreatEvaluator {
      * @param hostileEntities nearby hostile entities
      * @return the highest-threat entity, or null if none suitable
      */
+    /**
+     * Effective melee reach in blocks. Beyond this a melee swing whiffs, so a
+     * distant high-threat mob (a Creeper 20m away) must not outrank a close
+     * Zombie the bot can actually hit. Used to prefer reachable targets.
+     */
+    private static final double MELEE_REACH = 4.0;
+
     public static Entity selectHighestThreatTarget(ServerPlayer bot, List<Entity> hostileEntities) {
         if (hostileEntities.isEmpty()) {
             return null;
         }
 
-        Entity highestThreatEntity = null;
-        double highestThreat = -1.0;
+        // Two-pass selection: prefer a target the bot can actually hit, so it
+        // never whiffs at a distant "high threat" mob while a closer one is in
+        // melee range. Pass 1 picks the highest-threat mob within melee reach;
+        // pass 2 falls back to the closest mob (so navigation can close the gap).
+        Entity reachableTarget = null;
+        double reachableThreat = -1.0;
+        Entity closestTarget = null;
+        double closestDistance = Double.MAX_VALUE;
 
         for (Entity entity : hostileEntities) {
             double distance = Math.sqrt(entity.distanceToSqr(bot));
+
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestTarget = entity;
+            }
 
             // Calculate base threat based on entity type
             double baseThreat = calculateBaseThreatForEntity(entity, distance);
@@ -63,12 +81,16 @@ public final class ThreatEvaluator {
                 ", Distance bonus: " + String.format("%.1f", distanceModifier) +
                 ", Total: " + String.format("%.1f", totalThreat));
 
-            // Select highest threat
-            if (totalThreat > highestThreat) {
-                highestThreat = totalThreat;
-                highestThreatEntity = entity;
+            // Pass 1: highest-threat target actually within melee reach.
+            if (distance <= MELEE_REACH && totalThreat > reachableThreat) {
+                reachableThreat = totalThreat;
+                reachableTarget = entity;
             }
         }
+
+        // A reachable target always beats a distant one; otherwise close the gap.
+        Entity highestThreatEntity = reachableTarget != null ? reachableTarget : closestTarget;
+        double highestThreat = reachableTarget != null ? reachableThreat : -1.0;
 
         if (highestThreatEntity != null) {
             String targetName = highestThreatEntity.getName().getString();
@@ -76,7 +98,8 @@ public final class ThreatEvaluator {
 
             System.out.println("⚔ Selected Priority Target: " + targetName +
                 " (Threat: " + String.format("%.1f", highestThreat) +
-                ", Distance: " + String.format("%.1f", distance) + "m)");
+                ", Distance: " + String.format("%.1f", distance) + "m)" +
+                (reachableTarget != null ? " [within melee reach]" : " [nearest — closing distance]"));
 
             // Log reason if multiple enemies
             if (hostileEntities.size() > 1) {

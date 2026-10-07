@@ -105,6 +105,23 @@ public final class NavigationService {
         return SESSIONS.containsKey(botId);
     }
 
+    /**
+     * True only while the bot has a navigation session that is <em>actually
+     * moving/planning</em> (not suspended). {@link #isNavigating} is deliberately
+     * broader — it returns true for a suspended session too, because a suspended
+     * session still owns the movement slot until its suspension clears.
+     *
+     * <p>Combat uses this narrower check: when a threat suspends navigation the
+     * session stays in {@link #SESSIONS}, so {@link #isNavigating} would keep
+     * reporting "moving" and the bot would skip the combat reaction forever
+     * (the suspend-freeze deadlock). {@code isActivelyNavigating} returns false
+     * once suspended, so combat can engage and clear the threat.
+     */
+    public static boolean isActivelyNavigating(UUID botId) {
+        NavigationSession session = SESSIONS.get(botId);
+        return session != null && !isSuspended(session);
+    }
+
     public static boolean isAnyNavigating() {
         return !SESSIONS.isEmpty();
     }

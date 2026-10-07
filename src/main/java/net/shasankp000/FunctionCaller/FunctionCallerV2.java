@@ -2117,6 +2117,13 @@ public class FunctionCallerV2 {
                 // actions. Continue this exact plan after eating completes.
                 FoodConsumptionTool.awaitResume(botSource.getPlayer());
 
+                // Pause between atomic steps while a close threat is active, so
+                // reactive combat (AutoFaceEntity) resolves before the next step
+                // mutates the world. The plan resumes in place once the threat
+                // is gone — the "interrupt → fight → continue from where it left
+                // off" behaviour, at the step granularity.
+                awaitThreatClear(botSource.getPlayer());
+
                 // Get state BEFORE action
                 State stateBefore = initialState; // TODO: Could update this per step
 
@@ -2239,6 +2246,25 @@ public class FunctionCallerV2 {
             return verb + " (" + index + "/" + total + ")";
         }
         return verb;
+    }
+
+    /**
+     * Block the current plan-execution thread while a close hostile is active,
+     * yielding to {@link AutoFaceEntity}'s reactive combat. Polls every 500ms so
+     * the plan resumes promptly once the threat is cleared. A plan in progress
+     * therefore never runs a world-mutating step (place/craft/mine) while a mob
+     * is in the bot's face — it pauses, the bot fights, then it continues.
+     */
+    private static void awaitThreatClear(ServerPlayer bot) {
+        if (bot == null) return;
+        while (AutoFaceEntity.isCloseThreatActive(bot)) {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /**

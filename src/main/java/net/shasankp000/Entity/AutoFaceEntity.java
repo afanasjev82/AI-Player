@@ -112,6 +112,21 @@ public class AutoFaceEntity {
         return botExecutingTask;
     }
 
+    /**
+     * True while at least one live hostile is within {@link #THREAT_SUSPEND_RANGE}
+     * of the bot — i.e. close enough to be a real danger, not merely inside the
+     * wider 32-block awareness box. Used by the goal executor to pause a plan
+     * between atomic steps while combat resolves, then resume it.
+     */
+    public static boolean isCloseThreatActive(ServerPlayer bot) {
+        if (hostileEntities == null || hostileEntities.isEmpty() || bot == null) {
+            return false;
+        }
+        return hostileEntities.stream()
+                .filter(Entity::isAlive)
+                .anyMatch(e -> Math.sqrt(e.distanceToSqr(bot.position())) <= THREAT_SUSPEND_RANGE);
+    }
+
     public static void startAutoFace(ServerPlayer bot) {
         // Stop any existing executor for this bot
         LOGGER.info("========== STARTING AUTOFACE FOR BOT: {} ==========", bot.getName().getString());
@@ -368,12 +383,17 @@ public class AutoFaceEntity {
                         );
                     }
 
-                    // If the bot is actively navigating, skip the combat reaction.
-                    // The fallback attack issues /player attack + look, which cancel
-                    // the move-forward action and strand the bot mid-path (the
-                    // "Attacked X every second, never moves" loop). Navigation
-                    // completes first; combat re-engages once the bot is idle.
-                    if (NavigationService.isNavigating(bot.getUUID())) {
+                    // Skip the combat reaction ONLY while the bot is actively
+                    // navigating (moving/planning, not suspended). The fallback
+                    // attack issues /player attack + look, which cancel the
+                    // move-forward action and strand the bot mid-path (the
+                    // "Attacked X every second, never moves" loop). But a
+                    // THREAT-suspended session must NOT be skipped: suspend()
+                    // leaves the session in SESSIONS, so isNavigating() stayed
+                    // true and the bot froze (suspended, never fighting). Use
+                    // the narrower isActivelyNavigating() so combat engages the
+                    // moment a threat suspends navigation.
+                    if (NavigationService.isActivelyNavigating(bot.getUUID())) {
                         return;
                     }
 
