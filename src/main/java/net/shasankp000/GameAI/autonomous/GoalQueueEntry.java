@@ -25,4 +25,9 @@ public record GoalQueueEntry(String goalText, int priority, Source source)
     public int compareTo(GoalQueueEntry other) {
         return Integer.compare(other.priority(), this.priority());
     }
+
+    /** A copy of this entry with a re-scored priority (dynamic re-ordering). */
+    public GoalQueueEntry rescore(int newPriority) {
+        return new GoalQueueEntry(this.goalText, newPriority, this.source);
+    }
 }

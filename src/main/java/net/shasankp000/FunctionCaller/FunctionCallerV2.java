@@ -88,9 +88,24 @@ public class FunctionCallerV2 {
 
     private static volatile String functionOutput = null;
 
+    /**
+     * Set (from any thread) when a higher-priority task was injected into the
+     * goal queue while a plan is executing. The plan's step loop checks this
+     * between atomic steps and aborts, so the queue can run the higher-priority
+     * task; the caller re-enqueues the interrupted goal. Cleared by the engine.
+     */
+    public static volatile boolean preemptionRequested = false;
+
     private static final ExecutorService executor = Executors.newFixedThreadPool(4);
 
     private static final Map<String, Object> sharedState = new ConcurrentHashMap<>();  // Updated to Map<String, Object>
+
+    /** Thrown between plan steps to abort a plan for preemption (not a failure). */
+    static final class PreemptionException extends RuntimeException {
+        PreemptionException() {
+            super("preempted by a higher-priority task");
+        }
+    }
 
     private static UUID playerUUID;
 
@@ -2124,6 +2139,15 @@ public class FunctionCallerV2 {
                 // off" behaviour, at the step granularity.
                 awaitThreatClear(botSource.getPlayer());
 
+                // Preemption: a higher-priority task (player "come to me", a
+                // world event, a companion FOLLOW/STAY) was injected while this
+                // plan ran. Abort between steps so the queue can run it; the
+                // goal is re-enqueued by the caller (restart-at-goal-granularity
+                // checkpoint — plans are short and idempotent enough to re-run).
+                if (preemptionRequested) {
+                    throw new PreemptionException();
+                }
+
                 // Get state BEFORE action
                 State stateBefore = initialState; // TODO: Could update this per step
 
@@ -2214,7 +2238,11 @@ public class FunctionCallerV2 {
                 BotStatusLabel.clear(statusBotName);
             }
             if (ex != null) {
-                logger.error("Plan execution failed: {}", ex.getMessage());
+                if (ex instanceof PreemptionException || ex.getCause() instanceof PreemptionException) {
+                    logger.info("Plan {} preempted by a higher-priority task", plan.planId);
+                } else {
+                    logger.error("Plan execution failed: {}", ex.getMessage());
+                }
                 return false;
             } else {
                 logger.info("✓ Plan {} executed successfully", plan.planId);

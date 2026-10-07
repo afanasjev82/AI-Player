@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.shasankp000.AIPlayer;
+import net.shasankp000.Entity.AutoFaceEntity;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.planner.GoalMapper;
@@ -136,6 +137,20 @@ public class AutonomousGoalEngine {
     private final PriorityBlockingQueue<GoalQueueEntry> goalQueue =
             new PriorityBlockingQueue<>(MAX_QUEUE_DEPTH);
 
+    /**
+     * Dynamic-priority re-scorer. Pending goals are re-scored against live
+     * context whenever the bot's situation changes, so a task can move in the
+     * queue without being re-enqueued. Defaults to a zero-latency in-process
+     * heuristic; a Laya-backed scorer can replace it via {@link #setPriorityScorer}.
+     */
+    private volatile GoalPriorityScorer priorityScorer = new ThreatHeuristicGoalPriorityScorer();
+
+    /** Last computed context, so re-scoring only runs when something changed. */
+    private volatile GoalPriorityContext lastContext = GoalPriorityContext.CALM;
+
+    /** Base priority of the goal currently executing (sentinel when idle). */
+    private volatile int executingPriority = Integer.MIN_VALUE;
+
     /** Single-thread executor that drives the goal execution loop. */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
             r -> Thread.ofVirtual().name("autonomous-goal-loop").unstarted(r));
@@ -179,6 +194,7 @@ public class AutonomousGoalEngine {
      */
     public void injectUrgentGoal(String goalText) {
         enqueue(new GoalQueueEntry(goalText, 10, GoalQueueEntry.Source.WORLD_EVENT));
+        requestPreemptionIfHigher(10);
     }
 
     /**
@@ -187,6 +203,7 @@ public class AutonomousGoalEngine {
      */
     public void injectPlayerGoal(String goalText) {
         enqueue(new GoalQueueEntry(goalText, 5, GoalQueueEntry.Source.PLAYER));
+        requestPreemptionIfHigher(5);
     }
 
     /**
@@ -205,6 +222,20 @@ public class AutonomousGoalEngine {
      */
     public void injectGoalWithPriority(String goalText, int priority) {
         enqueue(new GoalQueueEntry(goalText, priority, GoalQueueEntry.Source.PLAYER));
+        requestPreemptionIfHigher(priority);
+    }
+
+    /**
+     * Ask the currently-running plan to abort at its next step boundary so a
+     * freshly-injected higher-priority task can run. Only fires when the new
+     * task genuinely outranks whatever is executing; the running goal is
+     * re-enqueued by the execution loop once the plan yields.
+     */
+    private void requestPreemptionIfHigher(int newPriority) {
+        int running = executingPriority;
+        if (running != Integer.MIN_VALUE && newPriority > running) {
+            net.shasankp000.FunctionCaller.FunctionCallerV2.preemptionRequested = true;
+        }
     }
 
     /**
@@ -236,6 +267,59 @@ public class AutonomousGoalEngine {
     /** Returns true while the bot entity is currently sleeping. */
     boolean isBotSleeping() {
         return sleepController.isBotSleeping();
+    }
+
+    /**
+     * Replace the dynamic-priority scorer. A Laya-backed scorer can implement
+     * {@link GoalPriorityScorer} and be installed here; the default is a
+     * zero-latency in-process heuristic.
+     */
+    public void setPriorityScorer(GoalPriorityScorer scorer) {
+        this.priorityScorer = scorer == null
+                ? new ThreatHeuristicGoalPriorityScorer()
+                : scorer;
+    }
+
+    /**
+     * Capture the bot's current situation into a {@link GoalPriorityContext}.
+     * Degrades to {@link GoalPriorityContext#CALM} when the bot is unavailable.
+     */
+    private GoalPriorityContext buildPriorityContext() {
+        ServerPlayer bot = resolveBot();
+        if (bot == null) return GoalPriorityContext.CALM;
+
+        boolean closeThreat = AutoFaceEntity.isCloseThreatActive(bot);
+        int hostileCount = (AutoFaceEntity.hostileEntities == null) ? 0 : AutoFaceEntity.hostileEntities.size();
+        long timeOfDay = bot.level().getDefaultClockTime() % 24000;
+        boolean night = timeOfDay >= 12500 && timeOfDay < 23460;
+        float health = bot.getMaxHealth() > 0 ? bot.getHealth() / bot.getMaxHealth() : 1.0f;
+
+        return new GoalPriorityContext(closeThreat, hostileCount, night, health, bot.getFoodData().getFoodLevel());
+    }
+
+    /**
+     * Re-score every pending goal against the live context, re-ordering the
+     * queue. Runs only when the context changed since the last pass (a threat
+     * appeared/cleared, day/night flipped) so it does no work in steady state.
+     * {@link PriorityBlockingQueue} does not re-sort in place, so this drains
+     * and re-offers — cheap at {@value #MAX_QUEUE_DEPTH} entries.
+     */
+    private void rescorePending() {
+        GoalPriorityContext ctx = buildPriorityContext();
+        if (ctx.equals(lastContext) && !goalQueue.isEmpty()) return;
+        lastContext = ctx;
+
+        GoalPriorityScorer scorer = priorityScorer;
+        List<GoalQueueEntry> drained = new ArrayList<>(goalQueue.size());
+        goalQueue.drainTo(drained);
+        for (GoalQueueEntry entry : drained) {
+            int res = scorer.computePriority(entry, ctx);
+            if (res != entry.priority()) {
+                goalQueue.offer(entry.rescore(res));
+            } else {
+                goalQueue.offer(entry);
+            }
+        }
     }
 
     /**
@@ -448,6 +532,11 @@ public class AutonomousGoalEngine {
                     continue;
                 }
 
+                // Re-score pending goals against the live context (dynamic
+                // priority) before deciding what runs next. No-op in steady
+                // state; re-orders only when the situation changed.
+                rescorePending();
+
                 // Block up to 5 s waiting for a goal
                 GoalQueueEntry entry = goalQueue.poll(5, TimeUnit.SECONDS);
                 if (entry == null) continue;
@@ -476,9 +565,12 @@ public class AutonomousGoalEngine {
         // Show the active task above the bot's head (e.g. "Paul [building]").
         // Cleared on every exit path via finally, so a stale label never lingers.
         BotStatusLabel.setStatus(botName, labelFor(entry.goalText()));
+        int previousPriority = executingPriority;
+        executingPriority = entry.priority();
         try {
             doExecuteGoal(entry);
         } finally {
+            executingPriority = previousPriority;
             BotStatusLabel.clear(botName);
         }
     }
@@ -533,6 +625,19 @@ public class AutonomousGoalEngine {
             achieved = HybridPlanner.executeGoal(bot, goalId, entry.goalText());
         } catch (Exception e) {
             LOGGER.error("[autonomous] HybridPlanner execution failed for '{}': {}", entry.goalText(), e.getMessage());
+        }
+
+        // A higher-priority task preempted this plan mid-execution. Re-enqueue
+        // this goal so it resumes (restart-at-goal-granularity) once the
+        // higher-priority task is done; never lose the interrupted work.
+        if (net.shasankp000.FunctionCaller.FunctionCallerV2.preemptionRequested) {
+            net.shasankp000.FunctionCaller.FunctionCallerV2.preemptionRequested = false;
+            if (entry.source() == GoalQueueEntry.Source.LLM_PLAN
+                    || entry.source() == GoalQueueEntry.Source.PLAYER) {
+                LOGGER.info("[autonomous] Re-enqueueing '{}' — preempted by a higher-priority task", entry.goalText());
+                enqueue(entry);
+            }
+            return;
         }
 
         recordFailure(entry, skillKey, achieved);
