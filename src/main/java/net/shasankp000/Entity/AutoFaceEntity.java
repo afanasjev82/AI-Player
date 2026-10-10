@@ -95,12 +95,43 @@ public class AutoFaceEntity {
     private static long lastThreatLogAt = 0L;
     private static final long THREAT_LOG_INTERVAL_MS = 5000L; // 5 seconds
 
+    // Rate-limit for the "I have no ranged weapon" help request. Only fires while
+    // a close hostile is present, but must be throttled harder than threat
+    // logging so the bot does not nag nearby players every single fight.
+    private static long lastRangedHelpAt = 0L;
+    private static final long RANGED_HELP_INTERVAL_MS = 120_000L; // 2 minutes
+
     /** Log a threat-detection message at most once per {@link #THREAT_LOG_INTERVAL_MS}. */
     private static void logThreatThrottled(String message) {
         long now = System.currentTimeMillis();
         if (now - lastThreatLogAt >= THREAT_LOG_INTERVAL_MS) {
             lastThreatLogAt = now;
             LOGGER.info("[autoface] {}", message);
+        }
+    }
+
+    /**
+     * When the bot is in close combat but has no ranged weapon, surface the
+     * unmet need to nearby players (throttled). Turns the silent per-tick
+     * "cannot shoot" risk penalty into an actionable request for help — the bot
+     * cannot craft a bow/arrows on its own yet, so asking is its only honest
+     * recourse.
+     */
+    private static void maybeRequestRangedHelp(ServerPlayer bot) {
+        if (net.shasankp000.PlayerUtils.RangedWeaponUtils.hasBowOrCrossbow(bot)
+                && net.shasankp000.PlayerUtils.RangedWeaponUtils.hasArrows(bot)) {
+            return; // already ranged-capable
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastRangedHelpAt < RANGED_HELP_INTERVAL_MS) return;
+        lastRangedHelpAt = now;
+        try {
+            ChatUtils.sendChatMessages(
+                    bot.createCommandSourceStack().withSuppressedOutput()
+                            .withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS),
+                    "I'm fighting mobs but I don't have a bow or arrows — if you can spare a bow and some arrows, that would really help!");
+        } catch (Exception e) {
+            LOGGER.warn("Could not send ranged-help request: {}", e.getMessage());
         }
     }
 
@@ -318,6 +349,8 @@ public class AutoFaceEntity {
                             .min().orElse(Double.MAX_VALUE);
                     if (closestThreatDist <= THREAT_SUSPEND_RANGE) {
                         NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
+                        // Close threat + no ranged weapon -> ask players for help.
+                        maybeRequestRangedHelp(bot);
                     } else {
                         NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
                     }

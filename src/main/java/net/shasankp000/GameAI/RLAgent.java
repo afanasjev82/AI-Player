@@ -700,7 +700,10 @@ public class RLAgent {
 
                     if (!hasBowOrCrossbow || !hasArrows) {
                         risk += 10.0; // High penalty if can't shoot
-                        System.out.println("Cannot shoot - missing bow/crossbow or arrows. Risk increased.");
+                        // Throttled: this risk case re-runs every autoface tick
+                        // (33ms) while a hostile is present, so an unthrottled
+                        // println flooded the console with the same line.
+                        logDecisionThrottled("Cannot shoot - missing bow/crossbow or arrows. Risk increased.");
                         break;
                     }
 
