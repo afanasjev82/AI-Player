@@ -89,6 +89,16 @@ public class FunctionCallerV2 {
     private static volatile String functionOutput = null;
 
     /**
+     * Last action result captured by {@link #getFunctionOutput}, kept even after
+     * {@link #reportCompletion} clears {@link #functionOutput} for chat-relay
+     * freshness. Verification reads this so a build/terraform result is judged
+     * on its ACTUAL output rather than the null {@code reportCompletion} left
+     * behind (which made every successful build fail as "verification failed:
+     * null" and poisoned the learning reward).
+     */
+    private static volatile String lastFunctionOutput = null;
+
+    /**
      * Set (from any thread) when a higher-priority task was injected into the
      * goal queue while a plan is executing. The plan's step loop checks this
      * between atomic steps and aborts, so the queue can run the higher-priority
@@ -378,6 +388,7 @@ public class FunctionCallerV2 {
 
     private static void getFunctionOutput(String method) {
         functionOutput = String.valueOf(method);
+        lastFunctionOutput = functionOutput;
     }
 
     /**
@@ -1318,8 +1329,8 @@ public class FunctionCallerV2 {
 
             logger.info("Running function: " + functionName + " with " + paramMap);
             callFunction(functionName, paramMap, sharedState).join(); // Sync call
-            logger.info("Function output: {}", functionOutput);
-            parseOutputValues(functionName, functionOutput);
+            logger.info("Function output: {}", lastFunctionOutput);
+            parseOutputValues(functionName, lastFunctionOutput);
 
             // Short wait for state to settle (e.g., for movement tools)
             try {
@@ -1499,8 +1510,8 @@ public class FunctionCallerV2 {
 
             logger.info("Running function: {} with {}", functionName, paramMap);
             callFunction(functionName, paramMap, sharedState).join();
-            logger.info("Function output: {}", functionOutput);
-            parseOutputValues(functionName, functionOutput);
+            logger.info("Function output: {}", lastFunctionOutput);
+            parseOutputValues(functionName, lastFunctionOutput);
 
             try {
                 Thread.sleep(100);
@@ -2575,11 +2586,16 @@ public class FunctionCallerV2 {
                 // through to `default`, which reported it as verified — a false
                 // success that hid the failure from the planner and the
                 // autonomous-learning reward.
-                if (functionOutput != null && functionOutput.startsWith("✅")) {
-                    logger.info("✓ build verification: {}", functionOutput);
+                //
+                // Read lastFunctionOutput (not functionOutput): reportCompletion
+                // clears functionOutput to null after relaying it to chat, so
+                // reading functionOutput here saw null even on a successful
+                // build and wrongly aborted the plan as critical.
+                if (lastFunctionOutput != null && lastFunctionOutput.startsWith("✅")) {
+                    logger.info("✓ build verification: {}", lastFunctionOutput);
                     return true;
                 }
-                logger.warn("✗ build verification failed: {}", functionOutput);
+                logger.warn("✗ build verification failed: {}", lastFunctionOutput);
                 return false;
 
             case "searchflatsite":
@@ -2593,11 +2609,12 @@ public class FunctionCallerV2 {
 
             case "terraform":
                 // terraform returns "✅ Terraformed site (...)" on success.
-                if (functionOutput != null && functionOutput.startsWith("✅")) {
-                    logger.info("✓ terraform verification: {}", functionOutput);
+                // Same null-read hazard as build: read lastFunctionOutput.
+                if (lastFunctionOutput != null && lastFunctionOutput.startsWith("✅")) {
+                    logger.info("✓ terraform verification: {}", lastFunctionOutput);
                     return true;
                 }
-                logger.warn("✗ terraform verification failed: {}", functionOutput);
+                logger.warn("✗ terraform verification failed: {}", lastFunctionOutput);
                 return false;
 
             default:
