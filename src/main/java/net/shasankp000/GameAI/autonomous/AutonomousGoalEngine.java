@@ -4,12 +4,17 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.Entity.AutoFaceEntity;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.companion.BotStance;
+import net.shasankp000.GameAI.companion.CompanionController;
 import net.shasankp000.GameAI.planner.GoalMapper;
 import net.shasankp000.GameAI.planner.HybridPlanner;
 import net.shasankp000.GameAI.planner.SkillExperienceStore;
@@ -151,6 +156,30 @@ public class AutonomousGoalEngine {
     /** Base priority of the goal currently executing (sentinel when idle). */
     private volatile int executingPriority = Integer.MIN_VALUE;
 
+    // ── Home anchor (WANDER-mode) ─────────────────────────────────────────────
+    /**
+     * Position of the last successfully-built shelter/room, treated as "home"
+     * while the bot wanders autonomously. When far from here at night (or idle
+     * in the day), the bot navigates back so it does not abandon its shelter
+     * to the next gather/explore goal forever.
+     */
+    private volatile BlockPos homePosition = null;
+    private volatile ResourceKey<Level> homeDimension = null;
+    private volatile long lastHomeReturnInjectedAt = 0L;
+
+    /** Priority for a night "return home" goal — matches STAY's return-to-anchor. */
+    static final int HOME_RETURN_NIGHT_PRIORITY = 20;
+    /** Priority for an idle daytime "return home" (above LLM 0, below PLAYER 5). */
+    static final int HOME_RETURN_IDLE_PRIORITY = 4;
+    /** Rate-limit on the daytime idle return so it does not re-issue churn. */
+    private static final long HOME_RETURN_COOLDOWN_MS = 30_000L;
+    /** Tighter re-issue gap at night: re-pin home often, but not every drift tick. */
+    private static final long HOME_RETURN_NIGHT_COOLDOWN_MS = 10_000L;
+    /** Beyond this horizontal distance at night, return to the shelter (blocks). */
+    static final double HOME_RETURN_NIGHT_DISTANCE = 12.0;
+    /** Beyond this horizontal distance while idle in the day, return home (blocks). */
+    static final double HOME_RETURN_IDLE_DISTANCE = 24.0;
+
     /** Single-thread executor that drives the goal execution loop. */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
             r -> Thread.ofVirtual().name("autonomous-goal-loop").unstarted(r));
@@ -290,8 +319,7 @@ public class AutonomousGoalEngine {
 
         boolean closeThreat = AutoFaceEntity.isCloseThreatActive(bot);
         int hostileCount = (AutoFaceEntity.hostileEntities == null) ? 0 : AutoFaceEntity.hostileEntities.size();
-        long timeOfDay = bot.level().getDefaultClockTime() % 24000;
-        boolean night = timeOfDay >= 12500 && timeOfDay < 23460;
+        boolean night = isNight(bot);
         float health = bot.getMaxHealth() > 0 ? bot.getHealth() / bot.getMaxHealth() : 1.0f;
 
         return new GoalPriorityContext(closeThreat, hostileCount, night, health, bot.getFoodData().getFoodLevel());
@@ -640,7 +668,88 @@ public class AutonomousGoalEngine {
             return;
         }
 
+        // A successful build becomes "home": the bot will return here at night
+        // or when idle, instead of abandoning its shelter to the next wander goal.
+        if (achieved && goalId == GoalMapper.GOAL_BUILD) {
+            recordHomeAnchor();
+        }
+
         recordFailure(entry, skillKey, achieved);
+    }
+
+    /**
+     * Record the bot's current position as its "home" after a successful build.
+     * Package-visible for tests.
+     */
+    void recordHomeAnchor() {
+        ServerPlayer bot = resolveBot();
+        if (bot == null) return;
+        homePosition = bot.blockPosition().immutable();
+        homeDimension = bot.level().dimension();
+        LOGGER.info("[autonomous] Bot '{}' made its home at {} (dimension {})", botName, homePosition, homeDimension);
+    }
+
+    /**
+     * Pure decision for whether the bot should return to its home anchor right now.
+     *
+     * <p>At night the shelter protects from mobs, so any meaningful distance
+     * triggers a return. In the day the bot may roam to gather/build, but when
+     * the queue is idle (nothing left to do) it returns rather than aimlessly
+     * re-planning "explore". Package-visible for tests.
+     */
+    static boolean shouldReturnHome(double horizontalDistance, boolean night, boolean queueEmpty) {
+        if (night) return horizontalDistance > HOME_RETURN_NIGHT_DISTANCE;
+        return queueEmpty && horizontalDistance > HOME_RETURN_IDLE_DISTANCE;
+    }
+
+    /**
+     * Called on the scheduler's drift-check cadence (every ~2 s). If the bot has
+     * a home anchor and is in WANDER stance, inject a "navigate home" goal when
+     * it is too far away at night (or idle and far during the day).
+     *
+     * <p>No-op while a player is addressing the bot, while the companion system
+     * owns navigation (STAY/FOLLOW), or while the bot is sleeping. At night the
+     * return uses a STAY-grade priority and re-issues whenever the bot is far, so
+     * a wander goal cannot drag it more than a few blocks from shelter; the idle
+     * daytime return is rate-limited.
+     */
+    public void homeReturnTick() {
+        if (homePosition == null || homeDimension == null) return;
+        if (playerControlled.get()) return;
+        if (sleepController.isBotSleeping()) return;
+
+        ServerPlayer bot = resolveBot();
+        if (bot == null) return;
+        if (!bot.level().dimension().equals(homeDimension)) return;
+
+        // Companion STAY/FOLLOW owns navigation — do not fight it.
+        if (CompanionController.getInstance().getStance(botName) != BotStance.WANDER) return;
+
+        double horizontal = Math.hypot(
+                bot.getX() - (homePosition.getX() + 0.5),
+                bot.getZ() - (homePosition.getZ() + 0.5));
+        boolean night = isNight(bot);
+        boolean queueEmpty = goalQueue.isEmpty();
+
+        if (!shouldReturnHome(horizontal, night, queueEmpty)) return;
+
+        long now = System.currentTimeMillis();
+        // Re-issue at night on a tight cadence (re-pin home without flooding the
+        // queue every drift tick); in the day rate-limit the idle return.
+        long cooldown = night ? HOME_RETURN_NIGHT_COOLDOWN_MS : HOME_RETURN_COOLDOWN_MS;
+        if (now - lastHomeReturnInjectedAt < cooldown) return;
+        lastHomeReturnInjectedAt = now;
+
+        int priority = night ? HOME_RETURN_NIGHT_PRIORITY : HOME_RETURN_IDLE_PRIORITY;
+        String goal = "navigate to " + homePosition.getX() + " " + homePosition.getY() + " " + homePosition.getZ();
+        injectGoalWithPriority(goal, priority);
+        LOGGER.info("[autonomous] Bot '{}' is {} blocks from home — returning ({})",
+                botName, String.format("%.1f", horizontal), night ? "night" : "idle");
+    }
+
+    private static boolean isNight(ServerPlayer bot) {
+        long timeOfDay = bot.level().getDefaultClockTime() % 24000;
+        return timeOfDay >= 12500 && timeOfDay < 23460;
     }
 
     /** Map a goal's text to a short visible task label (e.g. "building a house"). */
