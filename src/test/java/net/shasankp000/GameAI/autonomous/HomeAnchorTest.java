@@ -43,4 +43,20 @@ class HomeAnchorTest {
         assertTrue(AutonomousGoalEngine.HOME_RETURN_NIGHT_PRIORITY > AutonomousGoalEngine.HOME_RETURN_IDLE_PRIORITY,
                 "night return must dominate the idle return");
     }
+
+    @Test
+    void wanderGoalsAreMovementGoals() {
+        assertTrue(AutonomousGoalEngine.isWanderGoal("gather 32 wood"));
+        assertTrue(AutonomousGoalEngine.isWanderGoal("mine 16 stone"));
+        assertTrue(AutonomousGoalEngine.isWanderGoal("explore the area"));
+        assertTrue(AutonomousGoalEngine.isWanderGoal("navigate to 10 64 -20"));
+    }
+
+    @Test
+    void indoorGoalsAreNotWanderGoals() {
+        assertFalse(AutonomousGoalEngine.isWanderGoal("craft a stone pickaxe"));
+        assertFalse(AutonomousGoalEngine.isWanderGoal("build a shelter"));
+        assertFalse(AutonomousGoalEngine.isWanderGoal("farm some wheat"));
+        assertFalse(AutonomousGoalEngine.isWanderGoal("trade with the villager"));
+    }
 }
