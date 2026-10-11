@@ -2138,6 +2138,14 @@ public class FunctionCallerV2 {
             PlannedStep step = plan.steps.get(i);
             final int stepIndex = i;
 
+            // Only a *movement* step hands work to a background driver (the
+            // PathTracer), so only then must the next step wait for arrival.
+            // Scoping it this way deliberately excludes a COMBAT pursuit
+            // started inside a combat step, which would otherwise pin the plan
+            // until the chase resolved.
+            final boolean previousStepWasMovement = i > 0
+                    && isMovementStep(plan.steps.get(i - 1).actionName);
+
             sequentialExecution = sequentialExecution.thenCompose(_void -> {
                 // Hunger maintenance may suspend a busy plan between atomic
                 // actions. Continue this exact plan after eating completes.
@@ -2149,6 +2157,16 @@ public class FunctionCallerV2 {
                 // is gone — the "interrupt → fight → continue from where it left
                 // off" behaviour, at the step granularity.
                 awaitThreatClear(botSource.getPlayer());
+
+                // The previous step only *started* a walk; wait for the bot to
+                // actually arrive before running this one. Without this the step
+                // (mine/place/build/collect) executed mid-walk and failed its own
+                // range check instead — `mineBlock` rejected every gather target
+                // with "Target is more than five blocks away", so no wood was
+                // ever collected.
+                if (previousStepWasMovement) {
+                    awaitNavigationSettled(botSource.getPlayer());
+                }
 
                 // Preemption: a higher-priority task (player "come to me", a
                 // world event, a companion FOLLOW/STAY) was injected while this
@@ -2303,6 +2321,72 @@ public class FunctionCallerV2 {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+    }
+
+    /**
+     * Maximum time a plan waits for an asynchronous movement step to finish.
+     *
+     * <p>Generous on purpose: on the DGX Spark the server routinely runs tens of
+     * ticks behind, which makes a 20-block walk take far longer than its nominal
+     * duration.
+     */
+    private static final long NAVIGATION_SETTLE_TIMEOUT_MS = 60_000L;
+
+    /** Poll interval for {@link #awaitNavigationSettled}. */
+    private static final long NAVIGATION_SETTLE_POLL_MS = 250L;
+
+    /**
+     * Whether a step only <em>starts</em> asynchronous movement, so the step
+     * after it must wait for the bot to arrive.
+     */
+    private static boolean isMovementStep(String actionName) {
+        if (actionName == null) return false;
+        return switch (actionName.toLowerCase()) {
+            case "goto", "movetocoordinates", "chartpathtoblock" -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * Block until an in-flight movement step has actually finished.
+     *
+     * <p>{@code goTo} returns as soon as its path is <em>accepted</em> — the
+     * PathTracer then drives the bot over subsequent ticks — so without this wait
+     * the next step executes while the bot is still walking. That silently broke
+     * every gather trip: {@code mineBlock} ran mid-walk and was rejected by
+     * {@code MiningTool.validateStart} with "Target is more than five blocks
+     * away", so no wood was ever collected and the goal failed while looking like
+     * a mining bug.
+     *
+     * <p>Uses {@link NavigationService#isNavigating} rather than {@code
+     * isActivelyNavigating}: a <em>suspended</em> session has not arrived either,
+     * it is merely paused (by a threat or a tool), and resuming it is the
+     * PathTracer's job. Waiting for the session to leave {@code SESSIONS} covers
+     * both arrival and an outright failure (no path / stuck), so a failed walk
+     * fails the following step instead of hanging the plan.
+     */
+    private static void awaitNavigationSettled(ServerPlayer bot) {
+        if (bot == null) return;
+        java.util.UUID botId = bot.getUUID();
+        if (!NavigationService.isNavigating(botId)) return;
+
+        long deadline = System.currentTimeMillis() + NAVIGATION_SETTLE_TIMEOUT_MS;
+        while (NavigationService.isNavigating(botId) && System.currentTimeMillis() < deadline) {
+            // Let a queued higher-priority task abort this plan rather than
+            // keeping the worker pinned until the walk ends.
+            if (preemptionRequested) return;
+            try {
+                Thread.sleep(NAVIGATION_SETTLE_POLL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+
+        if (NavigationService.isNavigating(botId)) {
+            logger.warn("Movement step still in flight after {}s — continuing the plan in place",
+                    NAVIGATION_SETTLE_TIMEOUT_MS / 1000);
         }
     }
 
@@ -2537,13 +2621,38 @@ public class FunctionCallerV2 {
 
             case "goto":
             case "movetocoordinates":
-                // goTo is asynchronous (PathTracer drives the bot to the target
-                // over multiple ticks). Checking distance right after the call
-                // falsely reports failure while the bot is mid-walk, which then
-                // aborts the whole plan as a "critical" failure. Accept the path
-                // request as success; arrival is the responsibility of the
-                // PathTracer (which already validates its own completion).
-                logger.info("✓ goTo verification: path accepted (asynchronous movement)");
+                // Report the walk's ACTUAL outcome instead of assuming success.
+                //
+                // This used to return true unconditionally, on the reasoning that
+                // goTo is asynchronous so a distance check would fire mid-walk.
+                // That reasoning is stale: GoTo.goTo is now a blocking adapter
+                // (NavigationService.navigate().get(5, MINUTES)) for the plan
+                // threads, and it reports either "Bot moved to position ..." or
+                // "Navigation <status> at ... - <reason>". Treating a failed walk
+                // as verified let the plan carry on to act at a place the bot
+                // never reached — every gather trip then died in mineBlock with
+                // "Target is more than five blocks away" / "Player moved out of
+                // mining range", which read as mining bugs.
+                //
+                // goTo is a critical action, so an honest failure here aborts the
+                // plan (and the autonomous layer backs the goal off) rather than
+                // flailing at an unreachable target.
+                if (lastFunctionOutput == null) {
+                    logger.info("✓ goTo verification: no result recorded, assuming accepted");
+                    return true;
+                }
+                if (lastFunctionOutput.startsWith("Bot moved to position")) {
+                    logger.info("✓ goTo verification: {}", lastFunctionOutput);
+                    return true;
+                }
+                if (lastFunctionOutput.startsWith("Navigation")
+                        || lastFunctionOutput.startsWith("Failed to execute goTo")) {
+                    logger.warn("✗ goTo verification failed: {}", lastFunctionOutput);
+                    return false;
+                }
+                // A server-thread caller gets "Bot navigation started" (genuinely
+                // asynchronous) — arrival is the PathTracer's responsibility there.
+                logger.info("✓ goTo verification: {} (asynchronous movement)", lastFunctionOutput);
                 return true;
 
             case "mineblock":
@@ -2564,10 +2673,19 @@ public class FunctionCallerV2 {
                         if (block == Blocks.AIR) {
                             logger.info("✓ mineBlock verification: block successfully removed");
                             return true;
-                        } else {
-                            logger.warn("✗ mineBlock verification failed: block still exists at position");
-                            return false;
                         }
+                        // The block still being there is the *symptom*; name the
+                        // cause when the mining tool reported one. Without this the
+                        // log said "block still exists" for a mine that never
+                        // started (e.g. "Target is more than five blocks away"),
+                        // which reads as a world problem instead of a range one.
+                        if (lastFunctionOutput != null && lastFunctionOutput.contains("Failed to mine")) {
+                            logger.warn("✗ mineBlock verification failed: {}", lastFunctionOutput);
+                        } else {
+                            logger.warn("✗ mineBlock verification failed: block still exists at "
+                                    + blockPos.toShortString());
+                        }
+                        return false;
                     }
                 }
                 logger.info("✓ mineBlock verification: no target in SharedState, assuming success");

@@ -562,9 +562,35 @@ public class modCommandRegistry {
 
                                                     ChatUtils.sendChatMessages(botSource, "Planning: " + goal + "...");
 
+                                                    // A player-requested plan owns the bot until it
+                                                    // finishes, so pause the autonomous goal loop for
+                                                    // its duration. Otherwise the loop keeps executing
+                                                    // its own goals concurrently and the two fight over
+                                                    // the bot: the loop's own navigation drags the bot
+                                                    // away mid-step, so a mining step never completes
+                                                    // ("Mining exceeded its adaptive deadline") and every
+                                                    // gather trip lost its wood.
+                                                    String planBotName = bot.getName().getString();
+                                                    // Remember whether something else already owned
+                                                    // the bot (a player mid-conversation) so we restore
+                                                    // that instead of clearing it under them.
+                                                    net.shasankp000.GameAI.autonomous.AutonomousGoalEngine planEngine =
+                                                            AutonomousManager.getInstance().getEngine(planBotName);
+                                                    boolean planWasPlayerControlled =
+                                                            planEngine != null && planEngine.isPlayerControlled();
+                                                    Runnable releasePlanOwnership = () -> {
+                                                        if (!planWasPlayerControlled) {
+                                                            AutonomousManager.getInstance()
+                                                                    .setPlayerControlled(planBotName, false);
+                                                        }
+                                                    };
+                                                    AutonomousManager.getInstance()
+                                                            .setPlayerControlled(planBotName, true);
+
                                                     net.shasankp000.FunctionCaller.FunctionCallerV2.handleUserGoal(goal, currentState, bot, rlAgent, botSource)
                                                             .thenAccept(success -> {
                                                                 server.execute(() -> {
+                                                                    releasePlanOwnership.run();
                                                                     if (success) {
                                                                         ChatUtils.sendChatMessages(botSource, "✓ Plan executed successfully!");
                                                                         LOGGER.info("[planner] ✓ Goal '{}' completed", goal);
@@ -576,6 +602,7 @@ public class modCommandRegistry {
                                                             })
                                                             .exceptionally(ex -> {
                                                                 server.execute(() -> {
+                                                                    releasePlanOwnership.run();
                                                                     ChatUtils.sendChatMessages(botSource, "Error: " + ex.getMessage());
                                                                     LOGGER.error("[planner] Exception during goal execution", ex);
                                                                 });
