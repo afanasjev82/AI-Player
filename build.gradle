@@ -140,6 +140,15 @@ tasks.withType(JavaCompile).configureEach {
 tasks.withType(Test).configureEach {
 	useJUnitPlatform()
 	workingDir temporaryDir
+	// The benchmark harness in minecraft-server/eval/llm needs the action-planning
+	// prompt, which is assembled at runtime from the tool registry rather than
+	// stored anywhere. Gradle does not forward -D flags to the test JVM, so the
+	// opt-in output path has to be passed through explicitly. Tests otherwise
+	// keep writing only inside their temp working directory.
+	def benchmarkPromptOut = System.getProperty('aiplayer.benchmark.promptOut')
+	if (benchmarkPromptOut != null && !benchmarkPromptOut.isBlank()) {
+		systemProperty 'aiplayer.benchmark.promptOut', benchmarkPromptOut
+	}
 }
 
 java {
