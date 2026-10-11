@@ -38,6 +38,7 @@ public class AISearchConfig {
         // provider can be changed without editing settings.json5 or the JSON
         // config file. The JSON file below is only a fallback.
         PREFERRED_PROVIDER = firstNonBlank(System.getProperty("aiplayer.searchProvider"), PREFERRED_PROVIDER);
+        SERPER_API_KEY = firstNonBlank(System.getProperty("aiplayer.serperKey"), SERPER_API_KEY);
         DEEPSEEK_API_KEY = firstNonBlank(System.getProperty("aiplayer.deepseekKey"), DEEPSEEK_API_KEY);
         DEEPSEEK_MODEL = firstNonBlank(System.getProperty("aiplayer.deepseekModel"), DEEPSEEK_MODEL);
         DEEPSEEK_BASE_URL = firstNonBlank(System.getProperty("aiplayer.deepseekBaseUrl"), DEEPSEEK_BASE_URL);
@@ -82,7 +83,9 @@ public class AISearchConfig {
                 LOCAL_SEARCH_KEY = node.path("local_search_key").asText(LOCAL_SEARCH_KEY);
 
             GEMINI_API_KEY = node.path("gemini_api_key").asText(GEMINI_API_KEY);
-            SERPER_API_KEY = node.path("serper_api_key").asText(SERPER_API_KEY);
+            // Serper key: system property (.env) wins, JSON file is the fallback.
+            if (System.getProperty("aiplayer.serperKey") == null)
+                SERPER_API_KEY = node.path("serper_api_key").asText(SERPER_API_KEY);
         } catch (IOException e) {
             LOGGER.error("❌ Failed to load AI Search config: {}", e.getMessage());
         }
