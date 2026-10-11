@@ -121,6 +121,19 @@ class SkillPlanBuilderTest {
     }
 
     @Test
+    void craftInfersBowAndArrow() {
+        assertEquals("bow", SkillPlanBuilder.inferCraftItem("craft a bow"));
+        assertEquals("arrow", SkillPlanBuilder.inferCraftItem("craft some arrows"));
+        assertEquals("arrow", SkillPlanBuilder.inferCraftItem("make me an arrow"));
+    }
+
+    @Test
+    void gatherInfersGravelForFlint() {
+        assertEquals("minecraft:gravel", SkillPlanBuilder.inferBlockType("gather flint"));
+        assertEquals("minecraft:gravel", SkillPlanBuilder.inferBlockType("mine some gravel"));
+    }
+
+    @Test
     void farmProducesSingleFarmStep() {
         Plan plan = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_FARM, "farm wheat", state);
         assertNotNull(plan);

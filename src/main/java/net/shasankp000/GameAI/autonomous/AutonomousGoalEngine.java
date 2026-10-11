@@ -179,6 +179,8 @@ public class AutonomousGoalEngine {
     static final double HOME_RETURN_NIGHT_DISTANCE = 12.0;
     /** Beyond this horizontal distance while idle in the day, return home (blocks). */
     static final double HOME_RETURN_IDLE_DISTANCE = 24.0;
+    /** Within this distance of home the bot is "at home" for wander suppression. */
+    static final double HOME_AT_DISTANCE = 12.0;
 
     /** Single-thread executor that drives the goal execution loop. */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
@@ -395,7 +397,12 @@ public class AutonomousGoalEngine {
                     "IMPORTANT: if the bot is already deep underground (depth below surface is " +
                     "large), do NOT generate goals that would send it deeper (mining, digging, " +
                     "caving). Prefer goals that return it to the surface or work near the " +
-                    "surface.";
+                    "surface.\n" +
+                    "IMPORTANT: the bot can craft a bow (needs 3 string + 3 sticks) and arrows " +
+                    "(needs flint + stick + feather). If the bot already has string, propose " +
+                    "'craft a bow' so it can fight at range. To get flint, propose " +
+                    "'gather gravel' (flint drops when gravel is mined); string comes from " +
+                    "killing spiders and feather from killing chickens.";
 
             String userPrompt = "Bot state:\n" + stateSnapshot +
                     "\n\nGenerate the goal list JSON object now:";
@@ -435,6 +442,12 @@ public class AutonomousGoalEngine {
             // and the deterministic planner are unaffected.
             boolean alreadyDeep = bot != null && depthBelowSurface(bot) > UNDERGROUND_SUPPRESS_DEPTH;
 
+            // At night, when the bot has a shelter and is at (or near) it, suppress
+            // wander goals (gather/mine/explore/navigate) so it does not abandon its
+            // shelter the moment the LLM re-plans. Craft/build (indoor) still run; a
+            // bot far from home keeps wandering so it can find a route back.
+            boolean nightAtHome = isNightAtHome(bot);
+
             int enqueued = 0;
             int backedOff = 0;
             for (String goal : ranked) {
@@ -445,6 +458,10 @@ public class AutonomousGoalEngine {
                 if (alreadyDeep && isUndergroundDescentGoal(goal)) {
                     LOGGER.info("[autonomous] Skipping underground-descent '{}' (already {} blocks deep)",
                             goal, depthBelowSurface(bot));
+                    continue;
+                }
+                if (nightAtHome && isWanderGoal(goal)) {
+                    LOGGER.info("[autonomous] Suppressing wander goal '{}' — night at home", goal);
                     continue;
                 }
                 // Failure backoff: a skill that keeps failing must not be
@@ -490,6 +507,34 @@ public class AutonomousGoalEngine {
         // "mine" is the descent driver; "gather" of ore/logs can also dig, but
         // is more ambiguous — keep it simple and suppress only mine.
         return goalId == GoalMapper.GOAL_MINE;
+    }
+
+    /**
+     * Whether a goal would send the bot wandering away from its shelter
+     * (gather/mine/explore/navigate). Suppressed at night when the bot is home
+     * so it does not abandon its shelter the moment the LLM re-plans. Craft and
+     * build (indoor) are deliberately kept. Package-visible for tests.
+     */
+    static boolean isWanderGoal(String goal) {
+        short goalId = GoalMapper.parseGoal(goal);
+        return goalId == GoalMapper.GOAL_GATHER
+                || goalId == GoalMapper.GOAL_MINE
+                || goalId == GoalMapper.GOAL_EXPLORE
+                || goalId == GoalMapper.GOAL_NAVIGATE;
+    }
+
+    /**
+     * True when it is night and the bot has a home anchor within {@value #HOME_AT_DISTANCE}
+     * blocks — the situation where wander goals are suppressed.
+     */
+    private boolean isNightAtHome(ServerPlayer bot) {
+        if (bot == null || homePosition == null) return false;
+        if (!isNight(bot)) return false;
+        if (!bot.level().dimension().equals(homeDimension)) return false;
+        double horizontal = Math.hypot(
+                bot.getX() - (homePosition.getX() + 0.5),
+                bot.getZ() - (homePosition.getZ() + 0.5));
+        return horizontal <= HOME_AT_DISTANCE;
     }
 
     /**

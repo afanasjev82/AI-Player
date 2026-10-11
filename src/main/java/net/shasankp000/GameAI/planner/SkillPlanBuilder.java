@@ -239,6 +239,10 @@ public class SkillPlanBuilder {
         if (lower.contains("sand")) {
             return "minecraft:sand";
         }
+        if (lower.contains("flint") || lower.contains("gravel")) {
+            // Flint drops when gravel is mined; gather gravel to obtain it.
+            return "minecraft:gravel";
+        }
         // Default: the most universally useful gathering target.
         return "minecraft:oak_log";
     }
@@ -278,6 +282,8 @@ public class SkillPlanBuilder {
         if (lower.contains("furnace")) return "furnace";
         if (lower.contains("chest")) return "chest";
         if (lower.contains("planks")) return "planks";
+        if (lower.contains("bow")) return "bow";
+        if (lower.contains("arrow")) return "arrow";
         // Default: crafting table is the most useful first craft.
         return "crafting table";
     }

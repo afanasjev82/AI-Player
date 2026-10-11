@@ -74,7 +74,10 @@ public final class CraftingTool {
         Map.entry("stone axe", "minecraft:stone_axe"),
         Map.entry("stone sword", "minecraft:stone_sword"),
         Map.entry("furnace", "minecraft:furnace"),
-        Map.entry("chest", "minecraft:chest")
+        Map.entry("chest", "minecraft:chest"),
+        Map.entry("bow", "minecraft:bow"),
+        Map.entry("arrow", "minecraft:arrow"),
+        Map.entry("arrows", "minecraft:arrow")
     );
 
     /**
@@ -109,6 +112,11 @@ public final class CraftingTool {
         recipes.put("minecraft:stone_sword", new Recipe("minecraft:stone_sword", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:stick"}));
         recipes.put("minecraft:furnace", new Recipe("minecraft:furnace", 1, new String[]{"minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone", "minecraft:cobblestone"}));
         recipes.put("minecraft:chest", new Recipe("minecraft:chest", 1, new String[]{ANY_PLANKS, ANY_PLANKS, ANY_PLANKS, ANY_PLANKS, ANY_PLANKS, ANY_PLANKS, ANY_PLANKS, ANY_PLANKS}));
+        // Ranged combat. String is a raw material (spider drops / cobweb);
+        // flint is a raw material (mined from gravel); feather is a raw material
+        // (chicken drops). All three are only consumed, never crafted here.
+        recipes.put("minecraft:bow", new Recipe("minecraft:bow", 1, new String[]{"minecraft:string", "minecraft:string", "minecraft:string", "minecraft:stick", "minecraft:stick", "minecraft:stick"}));
+        recipes.put("minecraft:arrow", new Recipe("minecraft:arrow", 4, new String[]{"minecraft:flint", "minecraft:stick", "minecraft:feather"}));
         return recipes;
     }
 
@@ -135,7 +143,7 @@ public final class CraftingTool {
                 String key = keyOf(target);
                 if (!RECIPES.containsKey(key)) {
                     return "❌ No recipe available for " + itemDescription
-                            + " (supported: planks, sticks, torches, crafting table, wooden/stone tools, furnace, chest).";
+                            + " (supported: planks, sticks, torches, crafting table, wooden/stone tools, furnace, chest, bow, arrows).";
                 }
 
                 return callOnServer(bot, () -> craftRecursive(bot, target, Math.max(1, count), 0));
