@@ -81,7 +81,11 @@ public class WebSearchTool {
 
     private static String geminiSearch(String query) {
         try {
-            String apiKey = AIPlayer.CONFIG.getGeminiKey();
+            // Read the resolved config field, not AIPlayer.CONFIG directly: the
+            // field is seeded from settings.json5 and can be overridden by
+            // aiplayer.geminiKey (.env) / the JSON file, so this is the single
+            // source of truth — matching how the other providers read their keys.
+            String apiKey = AISearchConfig.GEMINI_API_KEY;
             if (apiKey.isBlank()) return "❌ Gemini API key is missing.";
 
             String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;

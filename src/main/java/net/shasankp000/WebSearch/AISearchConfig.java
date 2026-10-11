@@ -38,6 +38,9 @@ public class AISearchConfig {
         // provider can be changed without editing settings.json5 or the JSON
         // config file. The JSON file below is only a fallback.
         PREFERRED_PROVIDER = firstNonBlank(System.getProperty("aiplayer.searchProvider"), PREFERRED_PROVIDER);
+        // Gemini may already have come from settings.json5 (above); an explicit
+        // .env value wins over it, matching every other search key here.
+        GEMINI_API_KEY = firstNonBlank(System.getProperty("aiplayer.geminiKey"), GEMINI_API_KEY);
         SERPER_API_KEY = firstNonBlank(System.getProperty("aiplayer.serperKey"), SERPER_API_KEY);
         DEEPSEEK_API_KEY = firstNonBlank(System.getProperty("aiplayer.deepseekKey"), DEEPSEEK_API_KEY);
         DEEPSEEK_MODEL = firstNonBlank(System.getProperty("aiplayer.deepseekModel"), DEEPSEEK_MODEL);
@@ -82,8 +85,10 @@ public class AISearchConfig {
             if (System.getProperty("aiplayer.localSearchKey") == null)
                 LOCAL_SEARCH_KEY = node.path("local_search_key").asText(LOCAL_SEARCH_KEY);
 
-            GEMINI_API_KEY = node.path("gemini_api_key").asText(GEMINI_API_KEY);
-            // Serper key: system property (.env) wins, JSON file is the fallback.
+            // Gemini/Serper keys: system property (.env) wins, JSON file is the
+            // fallback — same precedence rule as the keys above.
+            if (System.getProperty("aiplayer.geminiKey") == null)
+                GEMINI_API_KEY = node.path("gemini_api_key").asText(GEMINI_API_KEY);
             if (System.getProperty("aiplayer.serperKey") == null)
                 SERPER_API_KEY = node.path("serper_api_key").asText(SERPER_API_KEY);
         } catch (IOException e) {
