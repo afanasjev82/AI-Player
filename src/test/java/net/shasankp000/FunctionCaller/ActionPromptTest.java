@@ -7,9 +7,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,6 +31,10 @@ class ActionPromptTest {
 
     private static final String OUTPUT_PROPERTY = "aiplayer.benchmark.promptOut";
     private static final String DEFAULT_OUTPUT = "build/benchmark/action_prompt.json";
+
+    /** Matches {@code "functionName": "..."} inside the prompt's worked examples. */
+    private static final Pattern FUNCTION_NAME_IN_EXAMPLE =
+            Pattern.compile("\"functionName\"\\s*:\\s*\"([^\"]+)\"");
 
     @Test
     void promptEmbedsTheToolCatalogue() {
@@ -56,6 +65,48 @@ class ActionPromptTest {
         // survive extraction for the pipeline placeholders to resolve.
         assertTrue(prompt.contains("Do remember to add a placeholder symbol"),
                 "prompt should explain the $ placeholder convention");
+    }
+
+    /**
+     * The prompt tells the model to use only the tools it is given. Worked
+     * examples that emit other names teach it to hallucinate: the example used
+     * to call {@code searchBlock}, while the registered tool is
+     * {@code searchBlocks}.
+     */
+    @Test
+    void workedExamplesOnlyUseRegisteredTools() {
+        String prompt = ActionPrompt.systemPrompt();
+        Set<String> registered = ToolRegistry.TOOLS.stream()
+                .map(Tool::name)
+                .collect(Collectors.toSet());
+
+        Matcher matcher = FUNCTION_NAME_IN_EXAMPLE.matcher(prompt);
+        List<String> taught = new ArrayList<>();
+        while (matcher.find()) {
+            taught.add(matcher.group(1));
+        }
+        assertFalse(taught.isEmpty(), "prompt should still contain worked examples");
+        for (String name : taught) {
+            assertTrue(registered.contains(name),
+                    "prompt example emits unregistered tool '" + name + "'");
+        }
+    }
+
+    /**
+     * Same contradiction in the placeholder table: it used to advertise
+     * {@code chartPathToBlock}, {@code faceBlock} and {@code faceEntity}, none of
+     * which are in the catalogue the model is shown.
+     */
+    @Test
+    void placeholderTableOnlyCoversRegisteredTools() {
+        Set<String> registered = ToolRegistry.TOOLS.stream()
+                .map(Tool::name)
+                .collect(Collectors.toSet());
+
+        for (String tool : ActionPrompt.functionStateKeys().keySet()) {
+            assertTrue(registered.contains(tool),
+                    "placeholder table mentions unregistered tool '" + tool + "'");
+        }
     }
 
     @Test

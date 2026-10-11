@@ -42,12 +42,18 @@ public final class ActionPrompt {
         return FUNCTION_STATE_KEYS;
     }
 
+    /**
+     * State keys the runtime exposes after each tool runs, so a later pipeline
+     * step can reference them as {@code $key}.
+     *
+     * <p>Deliberately contains <em>only</em> registered tools: the model is told
+     * to use the tools in the catalogue, so advertising a placeholder for a name
+     * it cannot call is noise at best and an invitation to hallucinate at worst.
+     * {@code ActionPromptTest} pins that invariant.
+     */
     private static final Map<String, List<String>> FUNCTION_STATE_KEYS = Map.ofEntries(
             Map.entry("detectBlocks", List.of("lastDetectedBlock.x", "lastDetectedBlock.y", "lastDetectedBlock.z")),
             Map.entry("goTo", List.of("botPosition.x", "botPosition.y", "botPosition.z")),
-            Map.entry("chartPathToBlock", List.of("finalBlockPos.x", "finalBlockPos.y", "finalBlockPos.z")),
-            Map.entry("faceBlock", List.of("facing.yaw", "facing.pitch")),
-            Map.entry("faceEntity", List.of("facing.entityName")),
             Map.entry("turn", List.of("facing.direction", "facing.facing", "facing.axis")),
             Map.entry("look", List.of("facing.direction", "facing.facing", "facing.axis")),
             Map.entry("mineBlock", List.of("lastMineStatus")),
@@ -157,7 +163,7 @@ public final class ActionPrompt {
             If you only need to use one tool, output in this JSON format.
             
             {
-              "functionName": "searchBlock",
+              "functionName": "searchBlocks",
               "parameters": [
                 { "parameterName": "direction", "parameterValue": "front" }
               ]
@@ -168,7 +174,7 @@ public final class ActionPrompt {
             {
               "pipeline": [
                 {
-                  "functionName": "searchBlock",
+                  "functionName": "searchBlocks",
                   "parameters": [
                     { "parameterName": "direction", "parameterValue": "front" }
                   ]
