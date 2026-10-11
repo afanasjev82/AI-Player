@@ -72,21 +72,16 @@ public class createFakePlayer extends ServerPlayer {
 
             if (!existingBotProfile.containsKey(username) || existingBotProfile.isEmpty()) {
                 gameProfile = new GameProfile(UUID.randomUUID(), username);
-                HashMap<String, String> botProfile = new HashMap<>();
-                botProfile.put(gameProfile.name(), gameProfile.id().toString());
 
                 System.out.println("New GameProfile: " + gameProfile);
 
                 try {
-                    AIPlayer.CONFIG.setBotGameProfile(botProfile);
-
-                    // Save the data to config as strings
-                    Map<String, String> currentBotProfile = new HashMap<>();
-                    for (Map.Entry<String, String> entry : botProfile.entrySet()) {
-                        currentBotProfile.put(entry.getKey(), entry.getValue());
-                    }
-
-                    AIPlayer.CONFIG.setBotGameProfile(currentBotProfile);
+                    // MERGE rather than replace: building a fresh map here dropped
+                    // every previously spawned bot's UUID, so respawning an old
+                    // bot minted a new identity and the earlier profiles were lost.
+                    Map<String, String> mergedProfiles = new HashMap<>(existingBotProfile);
+                    mergedProfiles.put(gameProfile.name(), gameProfile.id().toString());
+                    AIPlayer.CONFIG.setBotGameProfile(mergedProfiles);
                     AIPlayer.CONFIG.save();
                     System.out.println("Saved data to config");
 

@@ -2,6 +2,7 @@ package net.shasankp000.FilingSystem;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import net.shasankp000.ServiceLLMClients.*;
 import net.shasankp000.LauncherDetection.LauncherEnvironment;
@@ -27,8 +28,18 @@ public class ManualConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("ManualConfig");
     private static final String FILE_NAME = "settings.json5";
 
-    // Use a static method to get the correct, dynamically-resolved file path
-    private static final String FILE_PATH = getFilePath();
+    // Resolved on first use rather than at class-init. As a static final this
+    // called LauncherEnvironment.getStorageDirectory() -> FabricLoader during
+    // static initialisation, which throws outside the game and made the WHOLE
+    // class unloadable in a test JVM — including the pure rules below.
+    private static String cachedFilePath;
+
+    private static synchronized String filePath() {
+        if (cachedFilePath == null) {
+            cachedFilePath = getFilePath();
+        }
+        return cachedFilePath;
+    }
 
     // --- Configuration fields ---
     private List<String> modelList = new ArrayList<>();
@@ -42,6 +53,17 @@ public class ManualConfig {
     private String customApiUrl = "";
     /** Model name for Ollama-native calls; see {@link #getOllamaModel()}. */
     private String ollamaModel = "";
+
+    /**
+     * The chat endpoint/model as CONFIGURED, captured before
+     * {@link #applyChatOverrides()} replaced them with {@code .env} values.
+     *
+     * <p>{@code transient} so Gson never writes them, and they are what
+     * {@link #save()} persists — see that method for why.
+     */
+    private transient String configuredApiUrl;
+    private transient String configuredChatModel;
+
     private Map<String, String> botGameProfile = new HashMap<>();
 
     /**
@@ -185,8 +207,22 @@ public class ManualConfig {
      */
     public void save() {
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
-        try (FileWriter writer = new FileWriter(FILE_PATH)) {
-            gson.toJson(this, writer);
+
+        // Env overrides are runtime state, not configuration. Serialising `this`
+        // wrote them to disk, which made an override permanent: spawning a bot
+        // calls save(), so AI_CHAT_BASE_URL/AI_CHAT_MODEL got baked into
+        // settings.json5 and clearing them from .env stopped reverting anything.
+        // Persist the configured values; the overrides stay in memory only.
+        JsonObject json = gson.toJsonTree(this).getAsJsonObject();
+        if (configuredApiUrl != null) {
+            json.addProperty("customApiUrl", configuredApiUrl);
+        }
+        if (configuredChatModel != null) {
+            json.addProperty("selectedLanguageModel", configuredChatModel);
+        }
+
+        try (FileWriter writer = new FileWriter(filePath())) {
+            writer.write(gson.toJson(json));
         } catch (IOException e) {
             LOGGER.error("Failed to save config file: {}", e.getMessage());
         }
@@ -199,7 +235,7 @@ public class ManualConfig {
      * @return A loaded ManualConfig instance, or a new one if the file is not found.
      */
     public static ManualConfig load() {
-        File file = new File(FILE_PATH);
+        File file = new File(filePath());
         // Ensure the directory for the file exists before attempting to write.
         if (!file.getParentFile().exists()) {
             file.getParentFile().mkdirs();
@@ -240,6 +276,16 @@ public class ManualConfig {
     }
 
     /**
+     * The {@code .env} override rule for the chat endpoint/model: an absent or
+     * blank override keeps the configured value, a present one wins and is
+     * trimmed. Delegates to {@link EnvOverride} so there is one implementation
+     * of the rule, not two that can drift apart.
+     */
+    public static String withOverride(String configured, String override) {
+        return EnvOverride.resolve(configured, override);
+    }
+
+    /**
      * Apply {@code aiplayer.chatBaseUrl} / {@code aiplayer.chatModel} over
      * {@code settings.json5}, so the chat backend can be chosen from {@code .env}
      * without editing the config file on disk.
@@ -248,6 +294,14 @@ public class ManualConfig {
      * the previous behaviour for every existing deployment.
      */
     void applyChatOverrides() {
+        // Capture ONCE, before anything is replaced: a later call (config reload)
+        // must not mistake the already-overridden values for the configured ones,
+        // or the override would become permanent through save().
+        if (configuredApiUrl == null) {
+            configuredApiUrl = this.customApiUrl;
+            configuredChatModel = this.selectedLanguageModel;
+        }
+
         // Capture the file's own model before the chat override replaces it:
         // the native-Ollama calls must keep naming a model Ollama actually has.
         String configuredModel = this.selectedLanguageModel;
