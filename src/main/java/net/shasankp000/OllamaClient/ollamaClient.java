@@ -86,7 +86,7 @@ public class ollamaClient {
      * @throws Exception if the Ollama API call fails.
      */
     public static String sendMessage(String prompt) throws Exception {
-        String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
+        String selectedLM = AIPlayer.CONFIG.getOllamaModel();
 
         List<OllamaChatMessage> messages = new ArrayList<>();
         messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, generateSystemPrompt()));
@@ -299,7 +299,7 @@ public class ollamaClient {
         }
 
         ollamaAPI.setRequestTimeoutSeconds(90);
-        String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
+        String selectedLM = AIPlayer.CONFIG.getOllamaModel();
         LOGGER.info("Connecting to Ollama using model: {}", selectedLM);
 
         CompletableFuture.runAsync(() -> {

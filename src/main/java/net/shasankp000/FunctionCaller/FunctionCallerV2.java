@@ -122,7 +122,7 @@ public class FunctionCallerV2 {
 
     private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>", Pattern.DOTALL);
 
-    private static final String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
+    private static final String selectedLM = AIPlayer.CONFIG.getOllamaModel();
 
     // Markov Planner components (initialized on first use)
     private static Planner planner = null;
@@ -712,7 +712,7 @@ public class FunctionCallerV2 {
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
                             OllamaEndpoint.baseUrl(),
-                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            net.shasankp000.AIPlayer.CONFIG.getOllamaModel(),
                             messages
                     );
 
@@ -805,7 +805,7 @@ public class FunctionCallerV2 {
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
                             OllamaEndpoint.baseUrl(),
-                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            net.shasankp000.AIPlayer.CONFIG.getOllamaModel(),
                             messages
                     );
 
@@ -867,7 +867,7 @@ public class FunctionCallerV2 {
                 messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
                 String content = net.shasankp000.OllamaClient.OllamaAPIHelper.chatJson(
                         OllamaEndpoint.baseUrl(),
-                        AIPlayer.CONFIG.getSelectedLanguageModel(),
+                        AIPlayer.CONFIG.getOllamaModel(),
                         messages
                 ).getContent();
                 logger.info("Routed action planning through native Ollama JSON chat");
@@ -876,7 +876,11 @@ public class FunctionCallerV2 {
                 logger.warn("Native Ollama JSON chat failed ({}); falling back to the OpenAI-compatible client", e.getMessage());
             }
         }
-        return client.sendPrompt(fullSystemPrompt, userPrompt);
+        // Any other backend gets JSON mode too. The caller parses this reply, and a
+        // model left to its own devices emits prose instead: qwen3:8b answers
+        // "mine 16 oak logs" with ~1200 tokens of narrative. JSON mode also pins
+        // temperature to 0 and caps the reply, which bounds that failure.
+        return client.sendPromptJson(fullSystemPrompt, userPrompt);
     }
 
     private static String extractJson(String response) {
@@ -1099,7 +1103,7 @@ public class FunctionCallerV2 {
                             net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                                     ollamaAPI,
                                     OllamaEndpoint.baseUrl(),
-                                    net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                                    net.shasankp000.AIPlayer.CONFIG.getOllamaModel(),
                                     messages
                             );
 

@@ -311,7 +311,7 @@ public class RAG2 {
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
                             OllamaEndpoint.baseUrl(),
-                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            net.shasankp000.AIPlayer.CONFIG.getOllamaModel(),
                             messages
                     );
 

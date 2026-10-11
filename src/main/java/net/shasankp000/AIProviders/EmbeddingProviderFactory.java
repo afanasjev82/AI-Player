@@ -2,6 +2,7 @@ package net.shasankp000.AIProviders;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import net.shasankp000.OllamaClient.OllamaEndpoint;
+import net.shasankp000.FilingSystem.EnvOverride;
 import net.shasankp000.AIPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,10 +77,10 @@ public class EmbeddingProviderFactory {
                     );
 
                 case "custom":
-                    endpoint = AIPlayer.CONFIG.getCustomApiUrl();
+                    String chatEndpoint = AIPlayer.CONFIG.getCustomApiUrl();
                     apiKey = AIPlayer.CONFIG.getCustomApiKey();
 
-                    if (endpoint == null || endpoint.isEmpty()) {
+                    if (chatEndpoint == null || chatEndpoint.isEmpty()) {
                         throw new IllegalStateException("Custom OpenAI-compatible endpoint is not configured");
                     }
 
@@ -88,15 +89,33 @@ public class EmbeddingProviderFactory {
                         apiKey = "";
                     }
 
-                    // Ollama's OpenAI-compatible endpoint (localhost:11434/v1) only
-                    // serves models it has pulled (nomic-embed-text here), not the
-                    // OpenAI ada-002 default below. Detect it and use the local model.
-                    if (isOllamaEndpoint(endpoint)) {
-                        embeddingModel = "nomic-embed-text";
+                    // Embeddings are resolved SEPARATELY from chat, because the two
+                    // stop being the same server once chat moves to a chat-only
+                    // backend. The local vLLM serves gemma-4 for chat and exposes no
+                    // embedding model at all, so following customApiUrl here would
+                    // request /v1/embeddings from it and get a 404 — which is exactly
+                    // what happened when chat was first pointed at vLLM. Ollama is
+                    // where nomic-embed-text lives, so it is the default whenever the
+                    // chat endpoint is not itself Ollama. Set aiplayer.embedBaseUrl
+                    // when the custom endpoint really is an embedding server.
+                    endpoint = EnvOverride.resolve(null, System.getProperty("aiplayer.embedBaseUrl"));
+                    if (endpoint == null) {
+                        endpoint = isOllamaEndpoint(chatEndpoint)
+                                ? chatEndpoint
+                                : OllamaEndpoint.baseUrl() + "/v1";
                     }
 
-                    LOGGER.info("✅ Using custom OpenAI-compatible embedding endpoint: {}", endpoint);
-                    LOGGER.info("✅ Using embedding model: {}", embeddingModel);
+                    // Ollama's OpenAI-compatible endpoint only serves models it has
+                    // pulled (nomic-embed-text here), not the OpenAI ada-002 default.
+                    if (isOllamaEndpoint(endpoint)) {
+                        embeddingModel = "nomic-embed-text";
+                        apiKey = "";
+                    } else if (chatEndpoint != null && !endpoint.equals(chatEndpoint)) {
+                        LOGGER.warn("Embedding endpoint {} differs from the chat endpoint {}; "
+                                + "make sure it serves {}", endpoint, chatEndpoint, embeddingModel);
+                    }
+
+                    LOGGER.info("✅ Using embedding endpoint: {} (model {})", endpoint, embeddingModel);
                     return new EmbeddingProvider(
                             endpoint,
                             apiKey,

@@ -40,6 +40,8 @@ public class ManualConfig {
     private String grokKey = "";
     private String customApiKey = "";
     private String customApiUrl = "";
+    /** Model name for Ollama-native calls; see {@link #getOllamaModel()}. */
+    private String ollamaModel = "";
     private Map<String, String> botGameProfile = new HashMap<>();
 
     /**
@@ -206,6 +208,7 @@ public class ManualConfig {
         if (!file.exists()) {
             LOGGER.info("Config file not found. Creating a new one.");
             ManualConfig defaultConfig = new ManualConfig();
+            defaultConfig.applyChatOverrides();
             defaultConfig.save(); // Save the new config to create the file
             return defaultConfig;
         }
@@ -221,11 +224,65 @@ public class ManualConfig {
             if (loadedConfig.botPersonaMap == null) {
                 loadedConfig.botPersonaMap = new HashMap<>();
             }
+            // Environment overrides for the chat backend. settings.json5 is
+            // edited by hand and is not deployable, so without these there is no
+            // way to point the bot at a different chat model from .env. Applied
+            // after checkAndUpdateProvider, which can clear selectedLanguageModel
+            // when the provider changes.
+            loadedConfig.applyChatOverrides();
             return loadedConfig;
         } catch (IOException e) {
             LOGGER.error("Failed to load config file. Using default config.", e);
-            return new ManualConfig();
+            ManualConfig fallback = new ManualConfig();
+            fallback.applyChatOverrides();
+            return fallback;
         }
+    }
+
+    /**
+     * Apply {@code aiplayer.chatBaseUrl} / {@code aiplayer.chatModel} over
+     * {@code settings.json5}, so the chat backend can be chosen from {@code .env}
+     * without editing the config file on disk.
+     *
+     * <p>Both are optional: when unset the file's own values stand, which keeps
+     * the previous behaviour for every existing deployment.
+     */
+    void applyChatOverrides() {
+        // Capture the file's own model before the chat override replaces it:
+        // the native-Ollama calls must keep naming a model Ollama actually has.
+        String configuredModel = this.selectedLanguageModel;
+
+        this.ollamaModel = EnvOverride.resolve(configuredModel, System.getProperty("aiplayer.ollamaModel"));
+
+        String baseUrl = EnvOverride.resolve(this.customApiUrl, System.getProperty("aiplayer.chatBaseUrl"));
+        if (!baseUrl.equals(this.customApiUrl)) {
+            LOGGER.info("Chat base URL overridden to {} (was {})", baseUrl, this.customApiUrl);
+        }
+        this.customApiUrl = baseUrl;
+
+        String model = EnvOverride.resolve(configuredModel, System.getProperty("aiplayer.chatModel"));
+        if (!model.equals(this.selectedLanguageModel)) {
+            LOGGER.info("Chat model overridden to {} (was {})", model, this.selectedLanguageModel);
+            LOGGER.info("Native Ollama calls will keep using '{}'", this.ollamaModel);
+        }
+        this.selectedLanguageModel = model;
+    }
+
+    /**
+     * The model name for the Ollama-native calls (native {@code /api/chat},
+     * RAG answers, embeddings-adjacent work).
+     *
+     * <p>Distinct from {@link #getSelectedLanguageModel()} because the two stop
+     * being the same model once the chat backend moves to an OpenAI-compatible
+     * server: asking Ollama for {@code gemma-4-26b-it} fails, since that model
+     * lives in vLLM. Falls back to the configured chat model when unset, so
+     * single-backend deployments behave exactly as before.
+     */
+    public String getOllamaModel() {
+        if (ollamaModel != null && !ollamaModel.isBlank()) {
+            return ollamaModel;
+        }
+        return selectedLanguageModel;
     }
 
     /**

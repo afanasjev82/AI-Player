@@ -61,8 +61,17 @@ public class GenericOpenAIClient implements LLMClient {
         this.requestTimeout = requestTimeout;
         // Bounded connect/request timeouts so a hung LLM backend can never
         // block a caller (and, transitively, the Minecraft server thread) forever.
+        //
+        // HTTP/1.1 is forced. Java's HttpClient defaults to HTTP/2 over plain
+        // HTTP by attempting an h2c upgrade, which a plain-TCP vLLM/uvicorn
+        // endpoint does not speak: it answers 400 "Field required, loc body"
+        // because the request body never arrives. Verified against the local
+        // vLLM gemma-4 endpoint, and the same fix was needed in WebSearchTool.
+        // HTTP/1.1 is universally supported, so this is safe for the HTTPS
+        // providers (OpenAI/DeepSeek) too.
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
+                .version(HttpClient.Version.HTTP_1_1)
                 .build();
     }
 
