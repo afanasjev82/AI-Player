@@ -30,15 +30,33 @@ public final class CollectTool {
     private CollectTool() {}
 
     /**
-     * Collect all nearby item entities into the bot's inventory.
+     * Collect all item entities within the default gather radius.
      *
      * @return a human-readable summary of what was collected.
      */
     public static CompletableFuture<String> collectNearby(ServerPlayer bot) {
+        return collectNearby(bot, COLLECT_RADIUS);
+    }
+
+    /**
+     * Collect all item entities within {@code radius} blocks into the bot's
+     * inventory.
+     *
+     * <p>Note this is intentionally a "reach" collect, not a walk-then-touch:
+     * vanilla {@code ItemEntity.playerTouch} does not itself verify distance
+     * (the distance check lives in the collision path that calls it), so
+     * clearing the pickup delay and invoking it directly pulls in any item
+     * inside {@code radius}. Callers that kill a mob a few blocks away (loot
+     * collection) therefore widen the radius instead of paying for a walk.
+     *
+     * @param radius how far around the bot to sweep, in blocks
+     * @return a human-readable summary of what was collected.
+     */
+    public static CompletableFuture<String> collectNearby(ServerPlayer bot, double radius) {
         return runOnServer(bot, () -> {
             List<ItemEntity> items = bot.level().getEntities(
                     bot,
-                    bot.getBoundingBox().inflate(COLLECT_RADIUS),
+                    bot.getBoundingBox().inflate(radius),
                     e -> e instanceof ItemEntity
             ).stream().map(e -> (ItemEntity) e).toList();
 

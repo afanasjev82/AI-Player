@@ -281,6 +281,9 @@ public class BotEventHandler {
         // Evict mood/persona state on death so the next spawn starts fresh
         if (bot != null) {
             onBotDespawn(bot.getName().getString());
+            // Any kill loot still owed is gone with the dropped inventory —
+            // don't try to sweep it on respawn.
+            net.shasankp000.PlayerUtils.LootCollector.clear(bot.getUUID());
         }
 
         executor.submit(() -> {

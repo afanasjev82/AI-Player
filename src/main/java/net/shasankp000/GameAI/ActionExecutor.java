@@ -408,6 +408,13 @@ public final class ActionExecutor {
                     FaceClosestEntity.faceClosestEntity(bot, AutoFaceEntity.hostileEntities);
                     server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " attack");
 
+                    // Reactive/RL combat has no plan step to pick up drops. A
+                    // fatal swing is applied inline by the command, so note the
+                    // kill and let the loot sweep collect it once the fight ends.
+                    if (!attackTarget.isAlive() || attackTarget.isRemoved()) {
+                        net.shasankp000.PlayerUtils.LootCollector.noteKill(bot, attackTarget.getName().getString());
+                    }
+
                     // Melee completes instantly
                     completeAction(botName);
                 }

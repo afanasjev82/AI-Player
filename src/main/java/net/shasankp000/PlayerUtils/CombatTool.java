@@ -151,6 +151,16 @@ public final class CombatTool {
         bot.createCommandSourceStack().getServer().getCommands()
                 .performPrefixedCommand(source, "/player " + bot.getName().getString() + " attack");
 
+        // The command runs inline on the server thread, so a fatal swing has
+        // already been applied here. Reactive combat has no "collect" step, so
+        // note the kill and let LootCollector sweep the drop once the fight is
+        // over — otherwise the string/feather/bone never reaches the inventory.
+        if (!target.isAlive() || target.isRemoved()) {
+            LootCollector.noteKill(bot, target.getName().getString());
+            return "Killed " + target.getName().getString()
+                    + " at " + String.format("%.1f", distance) + "m — loot noted for collection.";
+        }
+
         return "Attacked " + target.getName().getString()
                 + " at " + String.format("%.1f", distance) + "m"
                 + (armed ? " (melee weapon equipped)." : " (no melee weapon — used fists).");

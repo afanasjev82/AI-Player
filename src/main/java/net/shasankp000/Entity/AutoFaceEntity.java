@@ -18,6 +18,7 @@ import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.GameAI.proximity.ProximityTracker;
 import net.shasankp000.PlayerUtils.BlockDistanceLimitedSearch;
 import net.shasankp000.PlayerUtils.blockDetectionUnit;
+import net.shasankp000.PlayerUtils.LootCollector;
 import net.shasankp000.PlayerUtils.ProjectileDefenseUtils;
 import net.shasankp000.PlayerUtils.PredictiveThreatDetector;
 import org.slf4j.Logger;
@@ -226,6 +227,15 @@ public class AutoFaceEntity {
             // always survives to the next tick.
             try {
             if (server != null && server.isRunning() && bot.isAlive()) {
+
+                // ===== POST-KILL LOOT SWEEP =====
+                // Reactive combat kills mobs one swing at a time with no plan
+                // step to collect the drop, so the melee paths note a kill and
+                // we sweep the drop up here. The sweep only clears the pickup
+                // delay and touches items within a few blocks — it never moves
+                // the bot — so it is safe to run unconditionally, ahead of the
+                // evasion/blocking/threat branches that can each return early.
+                LootCollector.tick(bot);
 
                 // ===== PRIORITY: UPDATE EVASION STATUS =====
                 // Check if bot should continue evading or stop (distance-based)
