@@ -96,16 +96,18 @@ class ActionPromptTest {
      * Same contradiction in the placeholder table: it used to advertise
      * {@code chartPathToBlock}, {@code faceBlock} and {@code faceEntity}, none of
      * which are in the catalogue the model is shown.
+     *
+     * <p>Checking the rendered prompt rather than the table means this still
+     * catches the mistake if those names reach the model by some other route.
+     * The table-level invariant lives in {@code ToolStateKeysTest}.
      */
     @Test
-    void placeholderTableOnlyCoversRegisteredTools() {
-        Set<String> registered = ToolRegistry.TOOLS.stream()
-                .map(Tool::name)
-                .collect(Collectors.toSet());
+    void promptNeverNamesUncallableTools() {
+        String prompt = ActionPrompt.systemPrompt();
 
-        for (String tool : ActionPrompt.functionStateKeys().keySet()) {
-            assertTrue(registered.contains(tool),
-                    "placeholder table mentions unregistered tool '" + tool + "'");
+        for (String unregistered : List.of("chartPathToBlock", "faceBlock", "faceEntity")) {
+            assertFalse(prompt.contains(unregistered),
+                    "prompt names '" + unregistered + "', which the model cannot call");
         }
     }
 

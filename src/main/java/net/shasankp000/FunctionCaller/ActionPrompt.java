@@ -35,32 +35,16 @@ public final class ActionPrompt {
     }
 
     /**
-     * Per-tool state keys the runtime can substitute into later pipeline steps,
-     * e.g. {@code $lastDetectedBlock.x}.
+     * Per-tool state keys the prompt advertises, so the LLM can reference a
+     * previous step's result as {@code $lastDetectedBlock.x}.
+     *
+     * <p>See {@link ToolStateKeys} — this is the advertised view only. The
+     * runtime's parsing view is wider and separate, because the two audiences
+     * differ.
      */
     public static Map<String, List<String>> functionStateKeys() {
-        return FUNCTION_STATE_KEYS;
+        return ToolStateKeys.advertised();
     }
-
-    /**
-     * State keys the runtime exposes after each tool runs, so a later pipeline
-     * step can reference them as {@code $key}.
-     *
-     * <p>Deliberately contains <em>only</em> registered tools: the model is told
-     * to use the tools in the catalogue, so advertising a placeholder for a name
-     * it cannot call is noise at best and an invitation to hallucinate at worst.
-     * {@code ActionPromptTest} pins that invariant.
-     */
-    private static final Map<String, List<String>> FUNCTION_STATE_KEYS = Map.ofEntries(
-            Map.entry("detectBlocks", List.of("lastDetectedBlock.x", "lastDetectedBlock.y", "lastDetectedBlock.z")),
-            Map.entry("goTo", List.of("botPosition.x", "botPosition.y", "botPosition.z")),
-            Map.entry("turn", List.of("facing.direction", "facing.facing", "facing.axis")),
-            Map.entry("look", List.of("facing.direction", "facing.facing", "facing.axis")),
-            Map.entry("mineBlock", List.of("lastMineStatus")),
-            Map.entry("getOxygenLevel", List.of("oxygenLevel")),
-            Map.entry("getHungerLevel", List.of("hungerLevel")),
-            Map.entry("getHealthLevel", List.of("healthLevel"))
-    );
 
     /** The complete system prompt, with the tool specification already embedded. */
     public static String systemPrompt() {
@@ -246,6 +230,6 @@ public final class ActionPrompt {
                 
                 And the correct placeholders to use per tool: \n
                 
-                """ + FUNCTION_STATE_KEYS + "\n Do remember to add a placeholder symbol: $ in front of each parameter name when designing the pipeline json.";
+                """ + ToolStateKeys.advertised() + "\n Do remember to add a placeholder symbol: $ in front of each parameter name when designing the pipeline json.";
     }
 }

@@ -1415,7 +1415,10 @@ public class FunctionCallerV2 {
 
 
     private static void parseOutputValues(String functionName, String output) {
-        List<String> keys = ActionPrompt.functionStateKeys().get(functionName);
+        // The PARSING view, not the prompt's advertised one. They used to be the
+        // same table, so dropping an entry from the prompt for tidiness also made
+        // the runtime unable to read that tool's output. See ToolStateKeys.
+        List<String> keys = ToolStateKeys.parseable().get(functionName);
         if (keys == null || keys.isEmpty()) return;
 
         List<Object> values = new ArrayList<>();
