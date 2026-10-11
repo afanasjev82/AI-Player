@@ -2451,12 +2451,24 @@ public class FunctionCallerV2 {
                     int blockY = (int) SharedStateUtils.getValue(state, "found_block_y");
                     int blockZ = (int) SharedStateUtils.getValue(state, "found_block_z");
 
-                    // Navigate to adjacent position (not ON the block)
-                    params.put("x", String.valueOf(blockX + 1));
-                    params.put("y", String.valueOf(blockY));
-                    params.put("z", String.valueOf(blockZ));
+                    // Stand NEXT TO the block, not blindly at +1 X: a blind offset
+                    // can land on open air (cliff edge), which navigation then
+                    // normalises to the cliff top, stranding the bot above the
+                    // target. Compute a standable cell at the block's own level.
+                    net.minecraft.core.BlockPos target = new net.minecraft.core.BlockPos(blockX, blockY, blockZ);
+                    net.minecraft.core.BlockPos stand = botSource != null && botSource.getPlayer() != null
+                            ? net.shasankp000.PlayerUtils.StandPosition.findStandNear(botSource.getPlayer(), target)
+                            : null;
+                    if (stand == null) {
+                        stand = target.offset(1, 0, 0); // fall back to the old heuristic
+                    }
+
+                    params.put("x", String.valueOf(stand.getX()));
+                    params.put("y", String.valueOf(stand.getY()));
+                    params.put("z", String.valueOf(stand.getZ()));
                     params.put("sprint", "true");
-                    logger.info("🔗 Resolved goTo params from SharedState: ({}, {}, {})", blockX+1, blockY, blockZ);
+                    logger.info("🔗 Resolved goTo params from SharedState: ({}, {}, {}) (stand for block {})",
+                            stand.getX(), stand.getY(), stand.getZ(), target.toShortString());
                 } else if (paramArray.length >= 3) {
                     params.put("x", paramArray[0]);
                     params.put("y", paramArray[1]);
