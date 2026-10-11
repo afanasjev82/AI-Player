@@ -8,6 +8,7 @@ import net.shasankp000.AIProviders.EmbeddingProviderFactory;
 import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Database.SQLiteDB;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.Overlay.ThinkingStateManager;
 import net.shasankp000.ServiceLLMClients.LLMClient;
@@ -23,7 +24,7 @@ import java.util.regex.Pattern;
 public class RAG2 {
 
     private static final Logger logger = LoggerFactory.getLogger("ai-player");
-    private static final OllamaAPI ollamaAPI = new OllamaAPI("http://localhost:11434");
+    private static final OllamaAPI ollamaAPI = new OllamaAPI(OllamaEndpoint.baseUrl());
     private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>");
     private static final int TOP_K = 5;
     private static EmbeddingProvider embeddingProvider;
@@ -309,7 +310,7 @@ public class RAG2 {
             net.shasankp000.OllamaClient.OllamaThinkingResponse response =
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
-                            "http://localhost:11434",
+                            OllamaEndpoint.baseUrl(),
                             net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
                             messages
                     );

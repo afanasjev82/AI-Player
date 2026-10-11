@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.shasankp000.Exception.ollamaNotReachableException;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,7 +37,7 @@ public class getLanguageModels {
         try {
             HttpClient client = HttpClient.newHttpClient();
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(new URI("http://localhost:11434/api/tags"))
+                    .uri(new URI(OllamaEndpoint.baseUrl() + "/api/tags"))
                     .GET()
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -59,7 +60,7 @@ public class getLanguageModels {
             }
 
         } catch (ConnectException e) {
-            LOGGER.warn("⚠ Ollama server is not running on localhost:11434. Please start Ollama to use AI chat features.");
+            LOGGER.warn("⚠ Ollama server is not running on {}. Please start Ollama to use AI chat features.", OllamaEndpoint.baseUrl());
             LOGGER.warn("The mod will continue to work, but AI chat will be unavailable until Ollama is started.");
         } catch (URISyntaxException | IOException | InterruptedException e) {
             LOGGER.error("Error connecting to Ollama Server: {}. Model list will be empty.", e.getMessage());

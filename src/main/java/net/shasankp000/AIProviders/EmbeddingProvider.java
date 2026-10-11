@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,7 +47,7 @@ public class EmbeddingProvider {
      */
     public EmbeddingProvider(OllamaAPI ollamaAPI, String embeddingModel) {
         this.ollamaAPI = ollamaAPI;
-        this.baseUrl = "http://localhost:11434";
+        this.baseUrl = OllamaEndpoint.baseUrl();
         this.apiKey = null;
         this.embeddingModel = embeddingModel;
         this.providerType = AIProviderType.OLLAMA;

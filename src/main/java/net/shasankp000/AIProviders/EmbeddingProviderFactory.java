@@ -1,6 +1,7 @@
 package net.shasankp000.AIProviders;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import net.shasankp000.AIPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -139,11 +140,6 @@ public class EmbeddingProviderFactory {
      * ada-002 name the generic default picks.
      */
     private static boolean isOllamaEndpoint(String endpoint) {
-        if (endpoint == null) {
-            return false;
-        }
-        String lower = endpoint.toLowerCase();
-        return lower.contains(":11434") || lower.contains("localhost") && lower.contains("11434")
-                || lower.contains("ollama");
+        return OllamaEndpoint.pointsAtOllama(endpoint);
     }
 }

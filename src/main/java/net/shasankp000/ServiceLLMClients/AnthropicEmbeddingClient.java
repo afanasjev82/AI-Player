@@ -3,6 +3,7 @@ package net.shasankp000.ServiceLLMClients;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,7 +83,7 @@ public class AnthropicEmbeddingClient implements EmbeddingClient {
         // Fallback to nomic-embed-text via Ollama if Voyage AI fails
         LOGGER.warn("Using Ollama fallback for embeddings");
         OllamaEmbeddingClient fallback = new OllamaEmbeddingClient(
-            new io.github.amithkoujalgi.ollama4j.core.OllamaAPI("http://localhost:11434/")
+            new io.github.amithkoujalgi.ollama4j.core.OllamaAPI(OllamaEndpoint.baseUrlSlash())
         );
         return fallback.generateEmbedding(text);
     }

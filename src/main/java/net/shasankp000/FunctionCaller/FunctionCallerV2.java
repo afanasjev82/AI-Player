@@ -7,6 +7,7 @@ import com.google.gson.*;
 import com.google.gson.stream.JsonReader;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 
 import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 
@@ -82,7 +83,7 @@ public class FunctionCallerV2 {
 
     private static final String DB_URL = "jdbc:sqlite:" + "./sqlite_databases/" + "memory_agent.db";
 
-    private static final String host = "http://localhost:11434/";
+    private static final String host = OllamaEndpoint.baseUrlSlash();
 
     private static final OllamaAPI ollamaAPI = new OllamaAPI(host);
 
@@ -899,7 +900,7 @@ public class FunctionCallerV2 {
             net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
-                            "http://localhost:11434",
+                            OllamaEndpoint.baseUrl(),
                             net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
                             messages
                     );
@@ -992,7 +993,7 @@ public class FunctionCallerV2 {
             net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
                     net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                             ollamaAPI,
-                            "http://localhost:11434",
+                            OllamaEndpoint.baseUrl(),
                             net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
                             messages
                     );
@@ -1048,14 +1049,13 @@ public class FunctionCallerV2 {
      */
     private static String sendForAction(LLMClient client, String fullSystemPrompt, String userPrompt) {
         String customUrl = AIPlayer.CONFIG.getCustomApiUrl();
-        if (customUrl != null && !customUrl.isBlank()
-                && (customUrl.contains("11434") || customUrl.toLowerCase().contains("ollama"))) {
+        if (OllamaEndpoint.pointsAtOllama(customUrl)) {
             try {
                 List<OllamaChatMessage> messages = new java.util.ArrayList<>();
                 messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
                 messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
                 String content = net.shasankp000.OllamaClient.OllamaAPIHelper.chatJson(
-                        "http://localhost:11434",
+                        OllamaEndpoint.baseUrl(),
                         AIPlayer.CONFIG.getSelectedLanguageModel(),
                         messages
                 ).getContent();
@@ -1287,7 +1287,7 @@ public class FunctionCallerV2 {
                     net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
                             net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
                                     ollamaAPI,
-                                    "http://localhost:11434",
+                                    OllamaEndpoint.baseUrl(),
                                     net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
                                     messages
                             );

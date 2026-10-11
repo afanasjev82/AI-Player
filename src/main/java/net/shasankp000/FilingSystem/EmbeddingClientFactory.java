@@ -2,6 +2,7 @@ package net.shasankp000.FilingSystem;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import net.shasankp000.AIPlayer;
+import net.shasankp000.OllamaClient.OllamaEndpoint;
 import net.shasankp000.ServiceLLMClients.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +14,7 @@ import org.slf4j.LoggerFactory;
 public class EmbeddingClientFactory {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("embedding-client-factory");
-    private static final String OLLAMA_HOST = "http://localhost:11434/";
+    private static final String OLLAMA_HOST = OllamaEndpoint.baseUrlSlash();
     private static EmbeddingClient cachedClient = null;
     private static String cachedMode = null;
 

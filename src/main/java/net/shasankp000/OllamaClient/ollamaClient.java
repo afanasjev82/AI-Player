@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
 public class ollamaClient {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
-    private static final String host = "http://localhost:11434";
+    private static final String host = OllamaEndpoint.baseUrl();
     public static String botName = "";
     public static boolean isInitialized = false;
     public static String initialResponse = "";
@@ -284,7 +284,7 @@ public class ollamaClient {
             return reachable;
         } catch (Exception e) {
             LOGGER.warn("\u26a0 Ollama server is not reachable: {}. AI chat features will be unavailable.", e.getMessage());
-            LOGGER.info("Please ensure Ollama is installed and running on localhost:11434");
+            LOGGER.info("Please ensure Ollama is installed and running on {}", OllamaEndpoint.baseUrl());
             return false;
         }
     }
