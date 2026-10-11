@@ -104,6 +104,16 @@ public final class ActionExecutor {
         }
         lastCombatFallbackAt = now;
 
+        // Hold the swing until the attack cooldown recharges. Carpet's ATTACK
+        // resets the attack-strength ticker on every entity hit, so swinging
+        // before the cooldown is full deals no damage AND keeps the ticker
+        // pinned near zero, starving every later swing as well. The 1s throttle
+        // above already clears a sword's 0.625s cooldown; this makes that
+        // invariant explicit rather than incidental.
+        if (!CombatTool.isSwingReady(bot)) {
+            return;
+        }
+
         String result = CombatTool.attackNearestHostileBlocking(bot, 8.0);
         // Only log a real attack; "No hostile mobs within N blocks" means the
         // detected hostile was beyond melee reach, which is not worth a log
@@ -403,9 +413,26 @@ public final class ActionExecutor {
                         break;
                     }
 
-                    System.out.println("Using MELEE attack (close range or no ranged weapon)");
+                    // Face the mob we actually chose. ThreatEvaluator can pick a
+                    // high-threat target that is NOT the nearest one, and facing
+                    // the nearest would aim the attack raycast at the wrong mob.
+                    FaceClosestEntity.faceEntity(bot, attackTarget);
 
-                    FaceClosestEntity.faceClosestEntity(bot, AutoFaceEntity.hostileEntities);
+                    // Hold the swing until the attack cooldown recharges. This
+                    // branch is re-entered every autoface tick (~33ms), and
+                    // carpet's ATTACK resets the attack-strength ticker on every
+                    // entity hit — so swinging at tick rate deals NO damage and
+                    // keeps the ticker pinned, starving every later swing too.
+                    // Waiting turns ~8 wasted swings per second into ~1.6 that
+                    // land at full strength (a sword's cooldown is 0.625s).
+                    // Facing still happens above, every tick, so the target is
+                    // tracked while we wait.
+                    if (!CombatTool.isSwingReady(bot)) {
+                        completeAction(botName);
+                        break;
+                    }
+
+                    System.out.println("Using MELEE attack (close range or no ranged weapon)");
                     server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " attack");
 
                     // Reactive/RL combat has no plan step to pick up drops. A

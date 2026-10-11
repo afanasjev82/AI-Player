@@ -44,7 +44,42 @@ public final class CombatTool {
      */
     public static final double MAX_SAFE_DROP = 4.0;
 
+    /**
+     * Attack-strength fraction above which a swing deals full damage. Mirrors
+     * vanilla's own gate in {@code Player.attack}.
+     */
+    public static final float MIN_ATTACK_STRENGTH = 0.9F;
+
+    /**
+     * Tick offset passed to {@code getAttackStrengthScale}. Vanilla samples at
+     * 0.5 ticks when deciding whether a swing damages; sampling the same way
+     * means we swing exactly when the hit will register.
+     */
+    public static final float ATTACK_STRENGTH_ADJUST_TICKS = 0.5F;
+
     private CombatTool() {}
+
+    /**
+     * True when the bot's attack cooldown has recharged enough for a swing to
+     * deal damage.
+     *
+     * <p><b>Callers that swing on a tick loop must hold the swing until this is
+     * true.</b> Carpet's {@code /player attack} calls {@code
+     * resetAttackStrengthTicker()} on every entity hit, so swinging faster than
+     * the cooldown does not deal partial damage — it deals <em>none</em>, and it
+     * keeps the ticker pinned near zero so no later swing damages either. A
+     * bot attacking every 33ms therefore loses every fight it should win.
+     */
+    public static boolean isSwingReady(ServerPlayer bot) {
+        if (bot == null) return false;
+        return isAttackStrengthSufficient(
+                bot.getAttackStrengthScale(ATTACK_STRENGTH_ADJUST_TICKS));
+    }
+
+    /** Pure form of the attack-strength gate, so it is testable without a bot. */
+    public static boolean isAttackStrengthSufficient(float scale) {
+        return scale > MIN_ATTACK_STRENGTH;
+    }
 
     /**
      * Attack the nearest hostile mob within {@value #SEARCH_RADIUS} blocks.
@@ -138,9 +173,17 @@ public final class CombatTool {
         // Arm with the best melee weapon we have (fists otherwise).
         boolean armed = WeaponUtils.equipBestMeleeWeapon(bot);
 
-        // Face the nearest hostile before attacking so the hit lands.
-        FaceClosestEntity.faceClosestEntity(bot, hostiles);
+        // Face the target we are about to swing at — aiming from the eye at the
+        // mob's body, not feet-to-feet. Carpet resolves the attack target with a
+        // ray from the eyes, so a level aim passes over a short mob entirely.
+        FaceClosestEntity.faceEntity(bot, target);
 
+        // Note this method deliberately does NOT gate on the attack cooldown:
+        // it is the "swing now, as asked" primitive, called once per plan step
+        // and once per second by the self-defense fallback — both slower than a
+        // sword's 0.625s cooldown. The callers that swing on a per-tick loop are
+        // the ones that must hold the swing (see ActionExecutor).
+        //
         // Attack via the Carpet `/player <bot> attack` command, consistent with
         // every other skill (mine/place/move all route through Carpet commands
         // rather than calling `bot.attack()` directly). This preserves vanilla
