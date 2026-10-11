@@ -100,8 +100,9 @@ class SkillPlanBuilderTest {
     void combatAndTradeAreNowSupported() {
         Plan combat = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_COMBAT, "fight zombies", state);
         assertNotNull(combat);
-        assertEquals(1, combat.steps.size());
+        assertEquals(2, combat.steps.size());
         assertEquals("combat", combat.steps.get(0).actionName);
+        assertEquals("collect", combat.steps.get(1).actionName, "combat must collect drops (string/feather)");
 
         Plan trade = SkillPlanBuilder.buildPlan(GoalMapper.GOAL_TRADE, "trade with villagers", state);
         assertNotNull(trade);

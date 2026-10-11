@@ -176,6 +176,11 @@ public class SkillPlanBuilder {
         // The combat tool locates its own target (nearest Monster/Slime within
         // 8 blocks), arms the best melee weapon, and attacks once.
         steps.add(step("combat", ""));
+        // A kill drops loot (string from spiders, feathers from chickens,
+        // rotten flesh, etc.). Collect it so the drop isn't left on the ground
+        // — this is what lets a combat kill feed a later craft (e.g. string for
+        // a bow). The collect step is a no-op when there is nothing nearby.
+        steps.add(step("collect", ""));
         return toPlan(goalId, steps);
     }
 

@@ -889,12 +889,18 @@ public class AutonomousGoalEngine {
                 : bot.getMainHandItem().getHoverName().getString();
         sb.append("- Holding: ").append(held).append("\n");
 
-        // Inventory item count (non-empty slots)
-        int itemCount = 0;
+        // Inventory contents: list each non-empty item by name + count so the
+        // goal planner can SEE materials (string, flint, feather) and propose
+        // the craft goals that need them. Without this the planner only knew the
+        // slot count and could never realize the bot has string to make a bow.
+        List<String> invItems = new ArrayList<>();
         for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
-            if (!bot.getInventory().getItem(i).isEmpty()) itemCount++;
+            net.minecraft.world.item.ItemStack stack = bot.getInventory().getItem(i);
+            if (stack.isEmpty()) continue;
+            String name = stack.getHoverName().getString();
+            invItems.add(name + " x" + stack.getCount());
         }
-        sb.append("- Inventory slots used: ").append(itemCount).append(" / 36\n");
+        sb.append("- Inventory: ").append(invItems.isEmpty() ? "empty" : String.join(", ", invItems)).append("\n");
 
         return sb.toString();
     }
