@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -35,6 +36,12 @@ public class WebSearchTool {
             .connectTimeout(Duration.ofSeconds(15))
             .version(HttpClient.Version.HTTP_1_1)
             .build();
+    // DuckDuckGo's Instant Answer API rejects Java's default User-Agent
+    // ("Java-http-client/25") with HTTP 403, even though the same URL works from
+    // curl with an empty UA. Any browser-like UA gets HTTP 200, so this is sent
+    // on the DuckDuckGo request only.
+    private static final String BROWSER_USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
     private static String llmMode = System.getProperty("aiplayer.llmMode", "custom");
     private static final Path CACHE_DIR = Paths.get("web_cache");
 
@@ -61,6 +68,7 @@ public class WebSearchTool {
         switch (AISearchConfig.PREFERRED_PROVIDER.toLowerCase()) {
             case "gemini" -> result = geminiSearch(cleanQuery);
             case "serper" -> result = serperSearch(cleanQuery);
+            case "duckduckgo", "ddg" -> result = duckDuckGoSearch(cleanQuery);
             case "deepseek" -> result = openAiCompatibleSearch(cleanQuery,
                     AISearchConfig.DEEPSEEK_BASE_URL, AISearchConfig.DEEPSEEK_API_KEY,
                     AISearchConfig.DEEPSEEK_MODEL, "DeepSeek");
@@ -70,13 +78,41 @@ public class WebSearchTool {
             default -> result = "❌ No search provider configured.";
         }
 
+        // Free, keyless fallback: if the configured provider failed — an
+        // exhausted credit balance (Serper 402), a revoked key, a quota — try
+        // DuckDuckGo's public Instant Answer API before giving up. It needs no
+        // key and no account, so it keeps the answer path alive when a paid
+        // provider stops working. It is deliberately NOT used as the primary
+        // source: it only covers instant-answer style questions, not the open
+        // web (see duckDuckGoSearch).
+        boolean usedFallback = false;
+        if (result.startsWith("❌") && !isDuckDuckGoProvider()) {
+            String fallback = duckDuckGoSearch(cleanQuery);
+            if (!fallback.startsWith("❌")) {
+                logger.info("🌐 Primary provider '{}' failed; answered via the free DuckDuckGo fallback",
+                        AISearchConfig.PREFERRED_PROVIDER);
+                result = fallback;
+                usedFallback = true;
+            }
+        }
+
         if (!result.startsWith("❌")) {
-            saveCache(cacheKey, result);
+            // Cache under the provider that actually answered, so a later run
+            // with a working paid key does not serve the fallback's answer.
+            saveCache(hash(generatedQuery + (usedFallback ? "duckduckgo" : AISearchConfig.PREFERRED_PROVIDER)),
+                    result);
         } else {
             logger.info("ℹ️ Not caching failed/empty result for: {}", cleanQuery);
         }
 
         return result;
+    }
+
+    /** Whether DuckDuckGo is the configured provider (so we skip self-fallback). */
+    private static boolean isDuckDuckGoProvider() {
+        String provider = AISearchConfig.PREFERRED_PROVIDER == null
+                ? "" : AISearchConfig.PREFERRED_PROVIDER.toLowerCase();
+        return provider.equals("duckduckgo") || provider.equals("ddg");
     }
 
     private static String geminiSearch(String query) {
@@ -107,6 +143,12 @@ public class WebSearchTool {
 
             HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 
+            int status = res.statusCode();
+            if (status < 200 || status >= 300) {
+                logger.error("❌ Gemini search failed: HTTP {} — {}", status, brief(res.body()));
+                return "❌ Gemini search failed: HTTP " + status + " " + brief(res.body());
+            }
+
             JsonNode root = new ObjectMapper().readTree(res.body());
             String answer = root.at("/candidates/0/content/parts/0/text").asText();
 
@@ -136,6 +178,14 @@ public class WebSearchTool {
 
             HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 
+            int status = res.statusCode();
+            if (status < 200 || status >= 300) {
+                // Serper reports an exhausted credit balance and an invalid key
+                // here (402/403); without this the caller saw only "no results".
+                logger.error("❌ Serper search failed: HTTP {} — {}", status, brief(res.body()));
+                return "❌ Serper search failed: HTTP " + status + " " + brief(res.body());
+            }
+
             JsonNode root = new ObjectMapper().readTree(res.body());
             JsonNode organic = root.path("organic");
             if (organic.isArray() && organic.size() > 0) {
@@ -154,6 +204,83 @@ public class WebSearchTool {
             logger.error("❌ Serper search failed: {}", e.getMessage());
             return "❌ Serper search failed: " + e.getMessage();
         }
+    }
+
+    /**
+     * DuckDuckGo Instant Answer API — free, keyless, no account.
+     *
+     * <p><b>What this is and is not.</b> It is <em>not</em> a general web search:
+     * it returns DuckDuckGo's curated instant answers, so open-ended factual
+     * questions ("capital of France", "population of Tokyo") generally come back
+     * empty. It is strong on entity/definition/calculation answers, and it has a
+     * dedicated {@code minecraft} answer source that returns exact crafting
+     * recipes — which is exactly what a Minecraft bot tends to ask about
+     * ("minecraft bow" → "Bow ingredients: 3 Sticks + 3 String").
+     *
+     * <p>That is why it is wired as a <em>fallback</em> rather than the primary
+     * provider: it keeps the answer path alive for free when a paid/keyed
+     * provider fails, without pretending to replace it.
+     */
+    private static String duckDuckGoSearch(String query) {
+        try {
+            String url = "https://api.duckduckgo.com/?q="
+                    + URLEncoder.encode(query, StandardCharsets.UTF_8)
+                    + "&format=json&no_html=1&skip_disambig=1";
+
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("User-Agent", BROWSER_USER_AGENT)
+                    .GET()
+                    .build();
+            HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+
+            int status = res.statusCode();
+            if (status < 200 || status >= 300) {
+                logger.error("❌ DuckDuckGo search failed: HTTP {} — {}", status, brief(res.body()));
+                return "❌ DuckDuckGo search failed: HTTP " + status;
+            }
+
+            JsonNode root = new ObjectMapper().readTree(res.body());
+
+            // Preference order: instant answer (covers the minecraft recipes),
+            // then the Wikipedia-style abstract, then a definition, then the
+            // first related topic.
+            String answer = root.path("Answer").asText("");
+            if (answer.isBlank()) answer = root.path("AbstractText").asText("");
+            if (answer.isBlank()) answer = root.path("Definition").asText("");
+            if (answer.isBlank()) answer = duckDuckGoFirstRelatedTopic(root);
+
+            if (answer.isBlank()) {
+                logger.info("ℹ️ DuckDuckGo had no instant answer for: {}", query);
+                return "❌ DuckDuckGo has no instant answer for this query.";
+            }
+
+            String source = root.path("AbstractSource").asText("");
+            String sourceUrl = root.path("AbstractURL").asText("");
+            StringBuilder sb = new StringBuilder();
+            if (!source.isBlank()) sb.append("🔗 ").append(source).append('\n');
+            sb.append(answer);
+            if (!sourceUrl.isBlank()) sb.append('\n').append(sourceUrl);
+
+            String result = sb.toString();
+            logger.info("🌐 DuckDuckGo result: {}", result);
+            return result;
+
+        } catch (Exception e) {
+            logger.error("❌ DuckDuckGo search failed: {}", e.getMessage());
+            return "❌ DuckDuckGo search failed: " + e.getMessage();
+        }
+    }
+
+    /** First usable {@code RelatedTopics[].Text}, skipping nested topic groups. */
+    private static String duckDuckGoFirstRelatedTopic(JsonNode root) {
+        JsonNode topics = root.path("RelatedTopics");
+        if (!topics.isArray()) return "";
+        for (JsonNode topic : topics) {
+            String text = topic.path("Text").asText("");
+            if (!text.isBlank()) return text;
+        }
+        return "";
     }
 
     /**
@@ -188,7 +315,6 @@ public class WebSearchTool {
 
             String bodyJson = mapper.writeValueAsString(body);
             logger.info("🌐 {} search → {} (model={})", providerLabel, url, model);
-
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
@@ -322,6 +448,17 @@ public class WebSearchTool {
 
 
         return response;
+    }
+
+    /**
+     * Shorten an error body for logs/messages. Provider error payloads can be
+     * long JSON documents, and the useful part (message/error/type) is at the
+     * front — keeping this bounded stops a 4xx from flooding the console.
+     */
+    private static String brief(String body) {
+        if (body == null) return "";
+        String trimmed = body.strip();
+        return trimmed.length() <= 200 ? trimmed : trimmed.substring(0, 200) + "…";
     }
 
     private static String hash(String input) {
