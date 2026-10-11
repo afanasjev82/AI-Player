@@ -3,6 +3,8 @@ package net.shasankp000.WebSearch;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.FilingSystem.LLMClientFactory;
@@ -53,6 +55,12 @@ public class WebSearchTool {
         switch (AISearchConfig.PREFERRED_PROVIDER.toLowerCase()) {
             case "gemini" -> result = geminiSearch(cleanQuery);
             case "serper" -> result = serperSearch(cleanQuery);
+            case "deepseek" -> result = openAiCompatibleSearch(cleanQuery,
+                    AISearchConfig.DEEPSEEK_BASE_URL, AISearchConfig.DEEPSEEK_API_KEY,
+                    AISearchConfig.DEEPSEEK_MODEL, "DeepSeek");
+            case "openai_compatible", "local" -> result = openAiCompatibleSearch(cleanQuery,
+                    AISearchConfig.LOCAL_SEARCH_BASE_URL, AISearchConfig.LOCAL_SEARCH_KEY,
+                    AISearchConfig.LOCAL_SEARCH_MODEL, "local LLM");
             default -> result = "❌ No search provider configured.";
         }
 
@@ -135,6 +143,52 @@ public class WebSearchTool {
         } catch (Exception e) {
             logger.error("❌ Serper search failed: {}", e.getMessage());
             return "❌ Serper search failed: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Ask an OpenAI-compatible chat-completions endpoint to answer the question
+     * directly. Serves both DeepSeek and any local/free OpenAI-compatible server
+     * (vLLM, Ollama's OpenAI endpoint, etc.) — same request contract, different
+     * base URL / model / key.
+     */
+    private static String openAiCompatibleSearch(String query, String baseUrl,
+                                                 String apiKey, String model, String providerLabel) {
+        try {
+            if (baseUrl == null || baseUrl.isBlank())
+                return "❌ " + providerLabel + " base URL is missing.";
+            if (model == null || model.isBlank())
+                return "❌ " + providerLabel + " model is missing.";
+
+            String url = baseUrl.replaceAll("/+$", "") + "/chat/completions";
+
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode body = mapper.createObjectNode();
+            body.put("model", model);
+            body.put("temperature", 0);
+            ArrayNode messages = body.putArray("messages");
+            ObjectNode userMessage = messages.addObject();
+            userMessage.put("role", "user");
+            userMessage.put("content", "Please provide a factual web-style answer for this question: " + query);
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+            if (apiKey != null && !apiKey.isBlank()) {
+                reqBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+
+            HttpResponse<String> res = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            JsonNode root = mapper.readTree(res.body());
+            String answer = root.at("/choices/0/message/content").asText();
+
+            logger.info("🌐 {} result: {}", providerLabel, answer);
+            return answer.isBlank() ? "❌ " + providerLabel + " returned no answer." : answer;
+
+        } catch (Exception e) {
+            logger.error("❌ {} search failed: {}", providerLabel, e.getMessage());
+            return "❌ " + providerLabel + " search failed: " + e.getMessage();
         }
     }
 
