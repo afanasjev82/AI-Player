@@ -1072,7 +1072,7 @@ public class FunctionCallerV2 {
                 paramMap.put(paramName, paramValue);
             }
 
-            boolean hasUnresolved = paramMap.values().stream().anyMatch(v -> v.equals("__UNRESOLVED__"));
+            boolean hasUnresolved = PlaceholderResolver.hasUnresolved(paramMap);
             if (hasUnresolved) {
                 logger.warn("⚠️ One or more parameters in step '{}' are unresolved. Triggering LLM fallback.", functionName);
                 if (retryCount >= maxRetries) {
@@ -1265,7 +1265,7 @@ public class FunctionCallerV2 {
                 paramMap.put(paramName, paramValue);
             }
 
-            boolean hasUnresolved = paramMap.values().stream().anyMatch(v -> v.equals("__UNRESOLVED__"));
+            boolean hasUnresolved = PlaceholderResolver.hasUnresolved(paramMap);
             if (hasUnresolved) {
                 logger.warn("⚠️ One or more parameters in step '{}' are unresolved. Triggering LLM fallback.", functionName);
                 if (retryCount >= maxRetries) {
@@ -1549,36 +1549,34 @@ public class FunctionCallerV2 {
     }
 
     private static String resolvePlaceholder(String value, Map<String, Object> state) {
-        if (value == null) return "0";
-        if (value.startsWith("$")) {
-            String key = value.substring(1);
-            Object resolvedObj = SharedStateUtils.getValue(state, key);
-            if (resolvedObj == null) {
-                logger.warn("⚠️ Placeholder '{}' not found in sharedState. Using fallback value '0'", key);
-                return "0";
-            }
-            String resolved = resolvedObj.toString();
-            logger.debug("🔁 Resolved placeholder {} → {}", key, resolved);
-            return resolved;
+        String resolved = PlaceholderResolver.resolve(value, key -> SharedStateUtils.getValue(state, key));
+        if (PlaceholderResolver.isUnresolved(resolved)) {
+            // Not "0". A guessed coordinate used to send the bot to the world origin;
+            // the sentinel lets the callers refuse the step instead. See
+            // PlaceholderResolver for why an omitted parameter is NOT this case.
+            logger.warn("⚠️ Placeholder '{}' has no value in bot state — marking the step unresolved", value);
         }
-        return value;
+        return resolved;
     }
 
     /**
      * Resolve a parameter that must be a coordinate, failing loudly when it
      * cannot be resolved.
      *
-     * <p>{@link #resolvePlaceholder} defaults an unresolved value to {@code 0}.
-     * For a coordinate that is dangerous rather than harmless: when the LLM
-     * invented a state-key name (e.g. {@code $lastFlatSite.x}) the bot was
-     * silently tasked with walking to the world origin (0,0,0). Aborting the
-     * step is far better than moving the bot somewhere arbitrary.
+     * <p>Guessing a coordinate is worse than aborting: when the LLM referenced a
+     * state key the runtime never publishes, the step used to be executed as a
+     * walk to the world origin. Applies to the resolved value, since callers pass
+     * a map that {@link #resolvePlaceholder} has already been through.
      *
      * @throws IllegalStateException when the value is absent or unresolved
      */
     private static String resolveCoord(String value, Map<String, Object> state, String axis) {
         if (value == null || value.isBlank()) {
             throw new IllegalStateException("No " + axis + " value supplied for this step");
+        }
+        if (PlaceholderResolver.isUnresolved(value)) {
+            throw new IllegalStateException("Unresolved coordinate '" + axis
+                    + "' (guessing 0 would move the bot to the world origin)");
         }
         if (value.startsWith("$")) {
             String key = value.substring(1);
@@ -1609,6 +1607,20 @@ public class FunctionCallerV2 {
     }
 
     private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap, Map<String, Object> state) {
+        // Last line of defence, and the only one the single-function paths have:
+        // three of the four callers of this method resolve placeholders and call
+        // straight through with no check, so an unresolvable $placeholder reached
+        // the tools as "0". Refuse rather than guess a position.
+        List<String> unresolved = PlaceholderResolver.unresolvedNames(paramMap);
+        if (!unresolved.isEmpty()) {
+            String detail = String.join(", ", unresolved);
+            logger.error("⛔ Refusing to run '{}': unresolved parameter(s) [{}] — the referenced bot state has no value",
+                    functionName, detail);
+            getFunctionOutput("⚠️ Failed to run " + functionName
+                    + ": could not resolve the bot state needed for [" + detail + "]");
+            return CompletableFuture.completedFuture(null);
+        }
+
         if ("mineBlock".equals(functionName)) {
             try {
                 int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
@@ -1651,24 +1663,24 @@ public class FunctionCallerV2 {
                     Tools.goTo(x, y, z, sprint);
                 }
                 case "chartPathToBlock" -> {
-                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
-                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
-                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
+                    int targetY = Integer.parseInt(resolveCoord(paramMap.get("targetY"), state, "targetY"));
+                    int targetZ = Integer.parseInt(resolveCoord(paramMap.get("targetZ"), state, "targetZ"));
                     String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
                     logger.info("Calling method: chartPathToBlock with targetX={} targetY={} targetZ={} blockType={}", targetX, targetY, targetZ, blockType);
                     Tools.chartPathToBlock(targetX, targetY, targetZ, blockType);
                 }
                 case "faceBlock" -> {
-                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
-                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
-                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
+                    int targetY = Integer.parseInt(resolveCoord(paramMap.get("targetY"), state, "targetY"));
+                    int targetZ = Integer.parseInt(resolveCoord(paramMap.get("targetZ"), state, "targetZ"));
                     logger.info("Calling method: faceBlock with targetX={} targetY={} targetZ={}", targetX, targetY, targetZ);
                     Tools.faceBlock(targetX, targetY, targetZ);
                 }
                 case "faceEntity" -> {
-                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
-                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
-                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    int targetX = Integer.parseInt(resolveCoord(paramMap.get("targetX"), state, "targetX"));
+                    int targetY = Integer.parseInt(resolveCoord(paramMap.get("targetY"), state, "targetY"));
+                    int targetZ = Integer.parseInt(resolveCoord(paramMap.get("targetZ"), state, "targetZ"));
                     logger.info("Calling method: faceEntity with targetX={} targetY={} targetZ={}", targetX, targetY, targetZ);
                     Tools.faceEntity(targetX, targetY, targetZ);
                 }
@@ -1740,9 +1752,13 @@ public class FunctionCallerV2 {
                 }
                 case "searchBlocks" -> {
                     String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
-                    int initialRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("initialRadius"), state));
-                    int maxRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("maxRadius"), state));
-                    int radiusIncrement = Integer.parseInt(resolvePlaceholder(paramMap.get("radiusIncrement"), state));
+                    // Defaults, not 0. The LLM routinely omits these, and zeroes make
+                    // SearchBlocks' expanding-radius loop spin forever (increment 0
+                    // never reaches maxRadius 0). Values match the examples the tool
+                    // advertises in ToolRegistry.
+                    int initialRadius = parseIntSafe(resolvePlaceholder(paramMap.get("initialRadius"), state), 10);
+                    int maxRadius = parseIntSafe(resolvePlaceholder(paramMap.get("maxRadius"), state), 100);
+                    int radiusIncrement = parseIntSafe(resolvePlaceholder(paramMap.get("radiusIncrement"), state), 20);
                     logger.info("Calling method: searchBlocks with blockType={} initialRadius={} maxRadius={} increment={}",
                             blockType, initialRadius, maxRadius, radiusIncrement);
 
@@ -1764,6 +1780,18 @@ public class FunctionCallerV2 {
                             SharedStateUtils.setValue(state, "found_block_z", result.getZ());
                             SharedStateUtils.setValue(state, "found_block_type", blockType);
                             SharedStateUtils.setValue(state, "search_success", true);
+
+                            // `found_block_*` is what the deterministic planner reads
+                            // (convertStepToParams). The LLM pipeline instead follows
+                            // the placeholder table and references
+                            // `$lastDetectedBlock.x/y/z`, which only `detectBlocks`
+                            // used to publish — so a successful searchBlocks left
+                            // those unresolved and the following goTo was refused.
+                            // Publish both names over the same value.
+                            SharedStateUtils.setValue(state, "lastDetectedBlock.x", result.getX());
+                            SharedStateUtils.setValue(state, "lastDetectedBlock.y", result.getY());
+                            SharedStateUtils.setValue(state, "lastDetectedBlock.z", result.getZ());
+
                             logger.info("✓ searchBlocks found {} at ({}, {}, {})", blockType, result.getX(), result.getY(), result.getZ());
                         } else {
                             SharedStateUtils.setValue(state, "search_success", false);

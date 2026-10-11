@@ -34,10 +34,15 @@ public class SharedStateUtils {
 
     /**
      * Resolves a placeholder key to a string (for params; uses toString() on non-strings).
+     *
+     * <p>Returns {@link PlaceholderResolver#UNRESOLVED} rather than a usable-looking
+     * value when the key is missing, so callers can tell "no value" apart from a
+     * real one. Silently substituting a default here is what used to send the bot
+     * to the world origin.
      */
     public static String resolveAsString(Map<String, Object> state, String key) {
         Object val = getValue(state, key);
-        if (val == null) return "__UNRESOLVED__";
+        if (val == null) return PlaceholderResolver.UNRESOLVED;
         return val.toString();
     }
 }

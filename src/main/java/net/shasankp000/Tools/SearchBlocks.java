@@ -90,12 +90,25 @@ public class SearchBlocks {
         LOGGER.info("Searching for {} within radius {}-{} blocks from {}",
             normalizedBlockType, initialRadius, maxRadius, botPos);
 
-        // Search in expanding shells
+        // Search in expanding shells.
+        //
+        // The step and the upper bound are clamped so no caller can stall this
+        // loop. A radiusIncrement of 0 never reaches maxRadius, and a maxRadius
+        // below initialRadius never runs at all — both were observed live, as a
+        // permanently spinning ForkJoinPool worker, when the LLM omitted the
+        // search radius parameters and they arrived as zeroes.
+        int step = Math.max(1, radiusIncrement);
+        int upperBound = Math.max(initialRadius, maxRadius);
+        if (step != radiusIncrement || upperBound != maxRadius) {
+            LOGGER.warn("Clamped degenerate search radii: increment {} -> {}, max {} -> {}",
+                radiusIncrement, step, maxRadius, upperBound);
+        }
+
         int currentRadius = initialRadius;
 
-        while (currentRadius <= maxRadius) {
+        while (currentRadius <= upperBound) {
             int finalRadius = currentRadius;
-            int prevRadius = Math.max(0, currentRadius - radiusIncrement);
+            int prevRadius = Math.max(0, currentRadius - step);
 
             LOGGER.debug("Searching shell: inner={}, outer={}", prevRadius, finalRadius);
 
@@ -110,10 +123,10 @@ public class SearchBlocks {
                 return result;
             }
 
-            currentRadius += radiusIncrement;
+            currentRadius += step;
         }
 
-        LOGGER.warn("No {} found within {} blocks", normalizedBlockType, maxRadius);
+        LOGGER.warn("No {} found within {} blocks", normalizedBlockType, upperBound);
         return null;
     }
 
