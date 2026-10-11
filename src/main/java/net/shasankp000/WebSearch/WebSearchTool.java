@@ -26,8 +26,14 @@ import java.util.Map;
 public class WebSearchTool {
 
     private static final Logger logger = LoggerFactory.getLogger("web-search-tool");
+    // Force HTTP/1.1: a plain-TCP vLLM/uvicorn endpoint does not speak HTTP/2,
+    // and Java's HttpClient defaults to HTTP/2 — which loses the request body
+    // against such a server (vLLM then reports "Field required, loc body").
+    // HTTP/1.1 is universally supported, so this is safe for the HTTPS cloud
+    // providers (DeepSeek/Gemini/Serper) too.
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
+            .version(HttpClient.Version.HTTP_1_1)
             .build();
     private static String llmMode = System.getProperty("aiplayer.llmMode", "custom");
     private static final Path CACHE_DIR = Paths.get("web_cache");
@@ -166,22 +172,48 @@ public class WebSearchTool {
             ObjectNode body = mapper.createObjectNode();
             body.put("model", model);
             body.put("temperature", 0);
+            // Reserve explicit completion budget. Some reasoning models (gemma-4)
+            // spend their default budget on internal reasoning and can truncate the
+            // visible answer to empty when the endpoint is under load; a fixed
+            // budget keeps the answer from being starved.
+            body.put("max_tokens", 2048);
             ArrayNode messages = body.putArray("messages");
             ObjectNode userMessage = messages.addObject();
             userMessage.put("role", "user");
             userMessage.put("content", "Please provide a factual web-style answer for this question: " + query);
 
+            String bodyJson = mapper.writeValueAsString(body);
+            logger.info("🌐 {} search → {} (model={})", providerLabel, url, model);
+
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+                    .POST(HttpRequest.BodyPublishers.ofString(bodyJson));
             if (apiKey != null && !apiKey.isBlank()) {
                 reqBuilder.header("Authorization", "Bearer " + apiKey);
             }
 
             HttpResponse<String> res = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            int status = res.statusCode();
+            if (status < 200 || status >= 300) {
+                logger.error("❌ {} search failed: HTTP {} — {}", providerLabel, status,
+                        res.body().length() > 300 ? res.body().substring(0, 300) : res.body());
+                return "❌ " + providerLabel + " search failed: HTTP " + status;
+            }
+
             JsonNode root = mapper.readTree(res.body());
-            String answer = root.at("/choices/0/message/content").asText();
+            JsonNode message = root.at("/choices/0/message");
+            // Reasoning models may put the answer in `reasoning`/`reasoning_content`
+            // and leave `content` empty; read whichever field actually carries text.
+            String answer = message.path("content").asText("");
+            if (answer.isBlank()) answer = message.path("reasoning").asText("");
+            if (answer.isBlank()) answer = message.path("reasoning_content").asText("");
+            if (answer.isBlank()) {
+                String finish = root.at("/choices/0/finish_reason").asText("?");
+                logger.warn("🌐 {} returned an empty answer (finish_reason={}, body={})", providerLabel, finish,
+                        res.body().length() > 300 ? res.body().substring(0, 300) : res.body());
+            }
 
             logger.info("🌐 {} result: {}", providerLabel, answer);
             return answer.isBlank() ? "❌ " + providerLabel + " returned no answer." : answer;
