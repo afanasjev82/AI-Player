@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Picks a cell for the bot to stand on while it interacts with a nearby block
@@ -44,7 +45,35 @@ public final class StandPosition {
      */
     public static BlockPos findStandNear(ServerPlayer bot, BlockPos target) {
         if (bot == null || target == null) return null;
-        ServerLevel world = bot.level();
+        return findStandNear(target, feet -> isStandable(bot.level(), feet));
+    }
+
+    /**
+     * Find a standable foot position at {@code target} itself if possible, else
+     * the closest standable neighbour. Returns {@code null} only when neither
+     * the target nor any immediate neighbour is standable.
+     *
+     * <p>Unlike {@link #findStandNear}, this accepts the target cell itself, so a
+     * raw foot block recorded earlier (e.g. a home anchor) can be resolved to a
+     * genuinely reachable stand cell even when that recorded block has since
+     * become occupied (for example the bot standing against a shelter wall).
+     * Uses the same off-thread world read as {@link #findStandNear}.
+     */
+    public static BlockPos findStandAtOrNear(ServerPlayer bot, BlockPos target) {
+        if (bot == null || target == null) return null;
+        return findStandAtOrNear(target, feet -> isStandable(bot.level(), feet));
+    }
+
+    /** Package-visible for tests: target cell first, then the neighbour scan. */
+    static BlockPos findStandAtOrNear(BlockPos target, Predicate<BlockPos> standable) {
+        if (target == null) return null;
+        if (standable.test(target)) return target;
+        return findStandNear(target, standable);
+    }
+
+    /** Package-visible for tests: ordered 3×3×3 neighbour scan against a standability predicate. */
+    static BlockPos findStandNear(BlockPos target, Predicate<BlockPos> standable) {
+        if (target == null) return null;
 
         List<BlockPos> candidates = new ArrayList<>();
         for (int dy = -1; dy <= 1; dy++) {
@@ -64,7 +93,7 @@ public final class StandPosition {
                 .thenComparingDouble(p -> p.distSqr(target)));
 
         for (BlockPos feet : candidates) {
-            if (isStandable(world, feet)) {
+            if (standable.test(feet)) {
                 return feet;
             }
         }

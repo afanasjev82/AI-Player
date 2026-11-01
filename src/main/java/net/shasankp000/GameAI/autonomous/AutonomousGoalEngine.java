@@ -25,6 +25,7 @@ import net.shasankp000.PathFinding.PathTracer;
 import net.shasankp000.PathFinding.SuspensionReason;
 import net.shasankp000.PlayerUtils.CombatTool;
 import net.shasankp000.PlayerUtils.RangedWeaponUtils;
+import net.shasankp000.PlayerUtils.StandPosition;
 import net.shasankp000.PlayerUtils.WeaponUtils;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import net.shasankp000.ServiceLLMClients.LLMServiceHandler;
@@ -753,7 +754,9 @@ public class AutonomousGoalEngine {
     void recordHomeAnchor() {
         ServerPlayer bot = resolveBot();
         if (bot == null) return;
-        homePosition = bot.blockPosition().immutable();
+        BlockPos raw = bot.blockPosition();
+        BlockPos stand = StandPosition.findStandAtOrNear(bot, raw);
+        homePosition = (stand != null ? stand : raw).immutable();
         homeDimension = bot.level().dimension();
         LOGGER.info("[autonomous] Bot '{}' made its home at {} (dimension {})", botName, homePosition, homeDimension);
     }
@@ -810,7 +813,12 @@ public class AutonomousGoalEngine {
         lastHomeReturnInjectedAt = now;
 
         int priority = night ? HOME_RETURN_NIGHT_PRIORITY : HOME_RETURN_IDLE_PRIORITY;
-        String goal = "navigate to " + homePosition.getX() + " " + homePosition.getY() + " " + homePosition.getZ();
+        // Repair a stale anchor at use time: the recorded foot block may have
+        // become occupied since it was set, which would make the navigator reject
+        // the goal (INVALID_GOAL) and leave the bot standing still.
+        BlockPos stand = StandPosition.findStandAtOrNear(bot, homePosition);
+        BlockPos target = stand != null ? stand : homePosition;
+        String goal = "navigate to " + target.getX() + " " + target.getY() + " " + target.getZ();
         injectGoalWithPriority(goal, priority);
         LOGGER.info("[autonomous] Bot '{}' is {} blocks from home — returning ({})",
                 botName, String.format("%.1f", horizontal), night ? "night" : "idle");
@@ -849,8 +857,13 @@ public class AutonomousGoalEngine {
         if (now - lastShelterRetreatAt < SHELTER_RETREAT_COOLDOWN_MS) return;
         lastShelterRetreatAt = now;
 
+        // Resolve a genuinely standable goal cell; a raw (or stale) anchor that
+        // is no longer standable is rejected by the navigator (INVALID_GOAL) and
+        // the retreat would fire without the bot ever moving.
+        BlockPos stand = StandPosition.findStandAtOrNear(bot, homePosition);
+        BlockPos target = stand != null ? stand : homePosition;
         NavigationService.navigateOverride(
-                bot, homePosition.immutable(), NavigationOptions.of(true), SuspensionReason.SHELTER)
+                bot, target.immutable(), NavigationOptions.of(true), SuspensionReason.SHELTER)
                 .whenComplete((result, error) -> {
                     if (error != null) {
                         LOGGER.warn("[autonomous] Bot '{}' shelter retreat nav error: {}", botName, error.toString());
