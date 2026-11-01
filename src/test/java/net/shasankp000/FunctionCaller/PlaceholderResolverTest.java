@@ -122,4 +122,42 @@ class PlaceholderResolverTest {
         assertTrue(PlaceholderResolver.unresolvedNames(Map.of()).isEmpty());
         assertFalse(PlaceholderResolver.hasUnresolved(null));
     }
+
+    @Test
+    void toParamMapAcceptsCanonicalPairs() {
+        com.google.gson.JsonArray params = com.google.gson.JsonParser.parseString(
+                "[{\"parameterName\":\"blockType\",\"parameterValue\":\"oak_log\"},"
+                        + "{\"parameterName\":\"x\",\"parameterValue\":\"$lastDetectedBlock.x\"}]")
+                .getAsJsonArray();
+        Function<String, Object> state = key -> "lastDetectedBlock.x".equals(key) ? 128 : null;
+
+        Map<String, String> result = PlaceholderResolver.toParamMap(params, state);
+
+        assertEquals("oak_log", result.get("blockType"));
+        assertEquals("128", result.get("x"));
+    }
+
+    @Test
+    void toParamMapAcceptsFlatObjects() {
+        com.google.gson.JsonArray params = com.google.gson.JsonParser.parseString(
+                "[{\"blockType\":\"oak_log\",\"initialRadius\":15,\"maxRadius\":50}]")
+                .getAsJsonArray();
+
+        Map<String, String> result = PlaceholderResolver.toParamMap(params, NO_STATE);
+
+        assertEquals("oak_log", result.get("blockType"));
+        assertEquals("15", result.get("initialRadius"));
+        assertEquals("50", result.get("maxRadius"));
+    }
+
+    @Test
+    void toParamMapResolvesPlaceholdersInFlatForm() {
+        com.google.gson.JsonArray params = com.google.gson.JsonParser.parseString(
+                "[{\"x\":\"$lastDetectedBlock.x\"}]").getAsJsonArray();
+        Function<String, Object> state = key -> "lastDetectedBlock.x".equals(key) ? -40 : null;
+
+        Map<String, String> result = PlaceholderResolver.toParamMap(params, state);
+
+        assertEquals("-40", result.get("x"));
+    }
 }

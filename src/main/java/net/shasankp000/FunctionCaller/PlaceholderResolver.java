@@ -1,7 +1,12 @@
 package net.shasankp000.FunctionCaller;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -71,6 +76,57 @@ public final class PlaceholderResolver {
         }
         Object resolved = lookup.apply(value.substring(1));
         return resolved == null ? UNRESOLVED : resolved.toString();
+    }
+
+    /**
+     * Normalises a step's {@code parameters} array into a name→value map,
+     * resolving {@code $placeholders} via {@code lookup}.
+     *
+     * <p>Accepts two shapes. The canonical one is the list of
+     * {@code {"parameterName": …, "parameterValue": …}} pairs the prompt asks
+     * for. But models frequently ignore that instruction and emit a single flat
+     * object ({@code {"blockType": "oak_log", "initialRadius": 15}}), where each
+     * key IS the parameter name and each value IS its value. The old code read
+     * {@code param.get("parameterName").getAsString()} unconditionally, so the
+     * flat form threw a {@link NullPointerException} inside the pipeline executor
+     * — which is never awaited — and the whole pipeline silently stopped with
+     * nothing in the log. Accepting both shapes removes that silent failure mode.
+     *
+     * @param parameters the {@code parameters} array from a pipeline step (or a
+     *                   single-function {@code "parameters"} value); may be null
+     * @param lookup     resolves a {@code $state.key} reference to its value
+     * @return name→value map in iteration order, never null
+     */
+    public static Map<String, String> toParamMap(JsonArray parameters, Function<String, Object> lookup) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (parameters == null) {
+            return out;
+        }
+        for (JsonElement param : parameters) {
+            if (param == null || !param.isJsonObject()) {
+                continue;
+            }
+            JsonObject obj = param.getAsJsonObject();
+            if (obj.has("parameterName")) {
+                String name = obj.get("parameterName").getAsString();
+                String raw = obj.has("parameterValue") ? obj.get("parameterValue").getAsString() : ABSENT;
+                out.put(name, resolve(raw, lookup));
+            } else {
+                for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
+                    JsonElement value = entry.getValue();
+                    String raw;
+                    if (value == null || value.isJsonNull()) {
+                        raw = ABSENT;
+                    } else if (value.isJsonPrimitive()) {
+                        raw = value.getAsString();
+                    } else {
+                        raw = value.toString();
+                    }
+                    out.put(entry.getKey(), resolve(raw, lookup));
+                }
+            }
+        }
+        return out;
     }
 
     /** Whether {@code value} is the {@link #UNRESOLVED} marker. */

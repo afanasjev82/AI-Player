@@ -312,17 +312,7 @@ public class FunctionCallerV2 {
                     // Single function call
                     String fnName = jsonObject.get("functionName").getAsString();
                     JsonArray paramsArray = jsonObject.getAsJsonArray("parameters");
-                    Map<String, String> paramMap = new HashMap<>();
-
-                    for (JsonElement parameter : paramsArray) {
-                        JsonObject paramObj = parameter.getAsJsonObject();
-                        String paramName = paramObj.get("parameterName").getAsString();
-                        String paramValue = resolvePlaceholder(
-                            paramObj.get("parameterValue").getAsString(),
-                            sharedState
-                        );
-                        paramMap.put(paramName, paramValue);
-                    }
+                    Map<String, String> paramMap = resolveParameterMap(paramsArray);
 
                     logger.info("[planner] ✓ LLM generated single function: {} with {}", fnName, paramMap);
                     callFunction(fnName, paramMap, sharedState).join();
@@ -938,16 +928,7 @@ public class FunctionCallerV2 {
                     AutoFaceEntity.setBotExecutingTask(true);
                     String fnName = jsonObject.get("functionName").getAsString();
                     JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
-                    Map<String, String> paramMap = new ConcurrentHashMap<>();
-                    StringBuilder params = new StringBuilder();
-                    for (JsonElement parameter : paramsArray) {
-                        JsonObject paramObj = parameter.getAsJsonObject();
-                        String paramName = paramObj.get("parameterName").getAsString();
-                        String paramValue = paramObj.get("parameterValue").getAsString();
-                        paramValue = resolvePlaceholder(paramValue, sharedState);
-                        params.append(paramName).append("=").append(paramValue).append(", ");
-                        paramMap.put(paramName, paramValue);
-                    }
+                    Map<String, String> paramMap = resolveParameterMap(paramsArray);
                     logger.info("Executing: {} with {}", fnName, paramMap);
                     callFunction(fnName, paramMap, sharedState).join();
                 } else if (jsonObject.has("clarification")) {
@@ -984,16 +965,7 @@ public class FunctionCallerV2 {
                     AutoFaceEntity.setBotExecutingTask(true);
                     String fnName = jsonObject.get("functionName").getAsString();
                     JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
-                    Map<String, String> paramMap = new ConcurrentHashMap<>();
-                    StringBuilder params = new StringBuilder();
-                    for (JsonElement parameter : paramsArray) {
-                        JsonObject paramObj = parameter.getAsJsonObject();
-                        String paramName = paramObj.get("parameterName").getAsString();
-                        String paramValue = paramObj.get("parameterValue").getAsString();
-                        paramValue = resolvePlaceholder(paramValue, sharedState);
-                        params.append(paramName).append("=").append(paramValue).append(", ");
-                        paramMap.put(paramName, paramValue);
-                    }
+                    Map<String, String> paramMap = resolveParameterMap(paramsArray);
                     logger.info("Executing: {} with {}", fnName, paramMap);
                     callFunction(fnName, paramMap, sharedState).join();
                 } else if (jsonObject.has("clarification")) {
@@ -1064,13 +1036,7 @@ public class FunctionCallerV2 {
             JsonObject step = pipelineStack.pop();
             String functionName = step.get("functionName").getAsString();
             JsonArray parameters = step.getAsJsonArray("parameters");
-            Map<String, String> paramMap = new HashMap<>();
-            for (JsonElement param : parameters) {
-                JsonObject paramObj = param.getAsJsonObject();
-                String paramName = paramObj.get("parameterName").getAsString();
-                String paramValue = resolvePlaceholder(paramObj.get("parameterValue").getAsString(), sharedState);
-                paramMap.put(paramName, paramValue);
-            }
+            Map<String, String> paramMap = resolveParameterMap(parameters);
 
             boolean hasUnresolved = PlaceholderResolver.hasUnresolved(paramMap);
             if (hasUnresolved) {
@@ -1257,13 +1223,7 @@ public class FunctionCallerV2 {
             JsonObject step = pipelineStack.pop();
             String functionName = step.get("functionName").getAsString();
             JsonArray parameters = step.getAsJsonArray("parameters");
-            Map<String, String> paramMap = new HashMap<>();
-            for (JsonElement param : parameters) {
-                JsonObject paramObj = param.getAsJsonObject();
-                String paramName = paramObj.get("parameterName").getAsString();
-                String paramValue = resolvePlaceholder(paramObj.get("parameterValue").getAsString(), sharedState);
-                paramMap.put(paramName, paramValue);
-            }
+            Map<String, String> paramMap = resolveParameterMap(parameters);
 
             boolean hasUnresolved = PlaceholderResolver.hasUnresolved(paramMap);
             if (hasUnresolved) {
@@ -1549,6 +1509,17 @@ public class FunctionCallerV2 {
             logger.error("Error occurred while processing the function result: ", e);
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Normalise a step's {@code parameters} array into a name→value map, resolving
+     * {@code $placeholders} against the shared state. Accepts both the canonical
+     * {@code {"parameterName":…, "parameterValue":…}} pairs the prompt asks for and
+     * the flat {@code {"blockType":"oak_log",…}} shape models often emit anyway
+     * (see {@link PlaceholderResolver#toParamMap}).
+     */
+    private static Map<String, String> resolveParameterMap(JsonArray parameters) {
+        return PlaceholderResolver.toParamMap(parameters, key -> SharedStateUtils.getValue(sharedState, key));
     }
 
     private static String resolvePlaceholder(String value, Map<String, Object> state) {
