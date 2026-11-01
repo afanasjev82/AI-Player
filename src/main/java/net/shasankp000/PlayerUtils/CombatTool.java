@@ -35,14 +35,29 @@ public final class CombatTool {
      * it dives and climbs out of reach, so a sword whiffs more often than not.
      *
      * <p>Deliberately narrow (mobs that actually fly under their own power and
-     * attack): the hostile list is filtered to {@link Monster}/{@link Slime},
-     * so this only needs to name the flying members of that set.
+     * attack): the hostile list is filtered via {@link #isHostileMob(Entity)}
+     * (the {@code Enemy} marker), which also covers {@link Phantom} and
+     * {@link Ghast} that extend {@code Mob} rather than {@code Monster}.
      */
     public static boolean isFlyingHostile(Entity entity) {
         return entity instanceof net.minecraft.world.entity.monster.Phantom
                 || entity instanceof net.minecraft.world.entity.monster.Vex
                 || entity instanceof net.minecraft.world.entity.monster.Ghast
                 || entity instanceof net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+    }
+
+    /**
+     * Whether the entity is a hostile mob — the canonical {@code Enemy} marker.
+     *
+     * <p>This is deliberately wider than the old {@code instanceof Monster}
+     * check, which silently excluded flying hostiles: {@link Phantom} and
+     * {@link Ghast} extend {@code Mob}, not {@code Monster}, so they never
+     * entered the hostile list and Paul could neither fight them nor retreat
+     * from them. Every "is this a hostile mob" filter should use this, not
+     * {@code Monster}/{@code Slime} directly.
+     */
+    public static boolean isHostileMob(Entity entity) {
+        return entity instanceof net.minecraft.world.entity.monster.Enemy;
     }
 
     private static final Logger LOGGER = LoggerFactory.getLogger("combat-tool");
@@ -273,7 +288,7 @@ public final class CombatTool {
         return nearby.stream()
                 .filter(e -> !(e instanceof net.minecraft.world.entity.projectile.Projectile))
                 .filter(e -> {
-                    if (e instanceof Monster || e instanceof Slime) return true;
+                    if (isHostileMob(e)) return true;
                     if (e instanceof Player player && !player.getUUID().equals(bot.getUUID())) {
                         return net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);
                     }

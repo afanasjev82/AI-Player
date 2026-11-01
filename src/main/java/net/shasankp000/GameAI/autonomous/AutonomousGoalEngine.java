@@ -850,7 +850,17 @@ public class AutonomousGoalEngine {
         lastShelterRetreatAt = now;
 
         NavigationService.navigateOverride(
-                bot, homePosition.immutable(), NavigationOptions.of(true), SuspensionReason.SHELTER);
+                bot, homePosition.immutable(), NavigationOptions.of(true), SuspensionReason.SHELTER)
+                .whenComplete((result, error) -> {
+                    if (error != null) {
+                        LOGGER.warn("[autonomous] Bot '{}' shelter retreat nav error: {}", botName, error.toString());
+                    } else {
+                        LOGGER.info("[autonomous] Bot '{}' shelter retreat nav result: {} ({} at {})",
+                                botName, result == null ? "null" : result.status(),
+                                result == null ? "" : result.message(),
+                                result == null ? "" : result.finalPosition());
+                    }
+                });
         LOGGER.info("[autonomous] Bot '{}' retreating to shelter from unfightable {} ({}m)",
                 botName, threat.getName().getString(),
                 String.format("%.1f", Math.sqrt(threat.distanceToSqr(bot))));

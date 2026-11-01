@@ -512,7 +512,7 @@ public final class ActionExecutor {
 
                 // Find nearest hostile entity to evade from
                 List<Entity> nearbyHostiles = AutoFaceEntity.detectNearbyEntities(bot, 20.0).stream()
-                    .filter(e -> e instanceof Monster || e instanceof Slime)
+                    .filter(e -> CombatTool.isHostileMob(e))
                     .toList();
 
                 if (!nearbyHostiles.isEmpty()) {

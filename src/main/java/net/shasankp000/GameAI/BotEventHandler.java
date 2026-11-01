@@ -167,7 +167,7 @@ public class BotEventHandler {
         }
 
         List<Entity> nearby = AutoFaceEntity.detectNearbyEntities(candidateBot, 32);
-        boolean hostileNearby = nearby.stream().anyMatch(entity -> entity instanceof Monster
+        boolean hostileNearby = nearby.stream().anyMatch(entity -> CombatTool.isHostileMob(entity)
                 || (entity instanceof net.minecraft.world.entity.player.Player player
                 && !player.getUUID().equals(candidateBot.getUUID())
                 && net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(candidateBot, player)));
@@ -357,7 +357,7 @@ public class BotEventHandler {
             List<Entity> hostileEntities = nearbyEntities.stream()
                     .filter(entity -> {
                         // Include HostileEntity mobs
-                        if (entity instanceof Monster) {
+                        if (CombatTool.isHostileMob(entity)) {
                             return true;
                         }
                         // Include hostile players tracked by retaliation system
@@ -394,7 +394,7 @@ public class BotEventHandler {
                             entity.getX(),
                             entity.getY(),
                             entity.getZ(),
-                            entity instanceof Monster,
+                            CombatTool.isHostileMob(entity),
                             directionToBot
                     ));
                 }
@@ -557,7 +557,7 @@ public class BotEventHandler {
                             entity.getX(),
                             entity.getY(),
                             entity.getZ(),
-                            entity instanceof Monster,
+                            CombatTool.isHostileMob(entity),
                             directionToBot
                     ));
                 }
@@ -796,7 +796,7 @@ public class BotEventHandler {
                 List<Entity> hostileEntities = nearbyEntities.stream()
                         .filter(entity -> {
                             // Include HostileEntity mobs
-                            if (entity instanceof Monster) {
+                            if (CombatTool.isHostileMob(entity)) {
                                 return true;
                             }
                             // Include hostile players tracked by retaliation system
@@ -901,7 +901,7 @@ public class BotEventHandler {
             directionToBot = AutoFaceEntity.determineDirectionToBot(bot, entity);
 
             // Determine if entity is hostile (either HostileEntity mob or hostile player)
-            boolean isHostile = entity instanceof Monster;
+            boolean isHostile = CombatTool.isHostileMob(entity);
             if (entity instanceof net.minecraft.world.entity.player.Player player &&
                 !player.getUUID().equals(bot.getUUID())) {
                 isHostile = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);

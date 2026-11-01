@@ -383,7 +383,7 @@ public class modCommandRegistry {
                                                     List<Entity> hostileEntities = nearbyEntities.stream()
                                                             .filter(entity -> {
                                                                 // Include hostile mobs
-                                                                if (entity instanceof Monster) {
+                                                                if (CombatTool.isHostileMob(entity)) {
                                                                     return true;
                                                                 }
                                                                 // Include hostile players (tracked by retaliation system)

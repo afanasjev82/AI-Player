@@ -262,8 +262,10 @@ public class AutoFaceEntity {
                 // CRITICAL: Exclude ALL projectile entities to prevent bot from facing arrows/stuck projectiles!
                  hostileEntities = nearbyEntities.stream()
                         .filter(entity -> {
-                            // Include hostile mobs (including SlimeEntity which is also a HostileEntity subclass)
-                            if (entity instanceof Monster || entity instanceof Slime) {
+                            // Include hostile mobs via the canonical Enemy marker,
+                            // which also covers flying hostiles (Phantom, Ghast)
+                            // that extend Mob rather than Monster.
+                            if (net.shasankp000.PlayerUtils.CombatTool.isHostileMob(entity)) {
                                 return true;
                             }
                             // Include hostile players (tracked by retaliation system)
