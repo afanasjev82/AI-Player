@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
@@ -18,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 public class BlockPlacementTool {
 
@@ -130,20 +132,7 @@ public class BlockPlacementTool {
                 // Use the block item
                 ItemStack handStack = bot.getItemInHand(InteractionHand.MAIN_HAND);
                 if (handStack.getItem() instanceof BlockItem) {
-                    bot.gameMode.useItemOn(bot, world, handStack, InteractionHand.MAIN_HAND, hitResult);
-
-                    // Verify placement
-                    BlockState placedState = world.getBlockState(targetPos);
-                    if (!placedState.isAir()) {
-                        String success = String.format("✅ Successfully placed %s at x:%d y:%d z:%d",
-                                normalizedBlockType, targetPos.getX(), targetPos.getY(), targetPos.getZ());
-                        LOGGER.info(success);
-                        return success;
-                    } else {
-                        String error = "⚠️ Block placement appeared to succeed but block is not present at target position";
-                        LOGGER.warn(error);
-                        return error;
-                    }
+                    return placeOnServerThread(bot, world, handStack, hitResult, targetPos, normalizedBlockType);
                 } else {
                     String error = "❌ Selected item is not a valid block item";
                     LOGGER.error(error);
@@ -295,6 +284,59 @@ public class BlockPlacementTool {
             }
         }
         return null;
+    }
+
+    /**
+     * Run the block placement on the server thread and read the result back
+     * there.
+     *
+     * <p>{@link #placeBlock} runs on the common ForkJoinPool (via
+     * {@code supplyAsync}). {@code useItemOn} mutates the world, so calling it
+     * off the server thread races the server tick: the placement "appears to
+     * succeed" (no exception) while the block is never committed, or the
+     * immediate read-back sees the pre-placement air. This is the same thread-
+     * safety rule {@code StructureBuilder.clearVolume} already honours by
+     * marshalling its {@code setBlockAndUpdate}.
+     */
+    private static String placeOnServerThread(ServerPlayer bot, Level world, ItemStack handStack,
+                                              BlockHitResult hitResult, BlockPos targetPos,
+                                              String normalizedBlockType) {
+        MinecraftServer server = world.getServer();
+        if (server == null || server.isSameThread()) {
+            return placeNow(bot, world, handStack, hitResult, targetPos, normalizedBlockType);
+        }
+        CompletableFuture<String> done = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                done.complete(placeNow(bot, world, handStack, hitResult, targetPos, normalizedBlockType));
+            } catch (Throwable t) {
+                done.completeExceptionally(t);
+            }
+        });
+        try {
+            return done.get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            return "❌ Failed to place block on the server thread: " + e.getMessage();
+        }
+    }
+
+    /** Place one block and report the outcome. Must run on the server thread. */
+    private static String placeNow(ServerPlayer bot, Level world, ItemStack handStack,
+                                   BlockHitResult hitResult, BlockPos targetPos,
+                                   String normalizedBlockType) {
+        bot.gameMode.useItemOn(bot, world, handStack, InteractionHand.MAIN_HAND, hitResult);
+
+        BlockState placedState = world.getBlockState(targetPos);
+        if (!placedState.isAir()) {
+            String success = String.format("✅ Successfully placed %s at x:%d y:%d z:%d",
+                    normalizedBlockType, targetPos.getX(), targetPos.getY(), targetPos.getZ());
+            LOGGER.info(success);
+            return success;
+        }
+        String error = "⚠️ Block placement did not take effect: " + targetPos + " is still "
+                + (placedState.isAir() ? "air" : placedState.getBlock().getName().getString());
+        LOGGER.warn(error);
+        return error;
     }
 }
 
