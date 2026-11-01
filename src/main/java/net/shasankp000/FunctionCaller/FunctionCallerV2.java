@@ -915,33 +915,37 @@ public class FunctionCallerV2 {
         String executionDateTime = getCurrentDateandTime();
         try {
             executor.submit(() -> {
-                String cleanedResponse = cleanJsonString(response);
-                logger.info("Cleaned JSON Response: {}", cleanedResponse);
-                JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
-                reader.setStrictness(Strictness.LENIENT);
-                JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
-                if (jsonObject.has("pipeline")) {
-                    AutoFaceEntity.setBotExecutingTask(true);
-                    JsonArray pipeline = jsonObject.getAsJsonArray("pipeline");
-                    runPipelineLoop(pipeline);
-                } else if (jsonObject.has("functionName")) {
-                    AutoFaceEntity.setBotExecutingTask(true);
-                    String fnName = jsonObject.get("functionName").getAsString();
-                    JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
-                    Map<String, String> paramMap = resolveParameterMap(paramsArray);
-                    logger.info("Executing: {} with {}", fnName, paramMap);
-                    callFunction(fnName, paramMap, sharedState).join();
-                } else if (jsonObject.has("clarification")) {
-                    System.out.println("Detected clarification");
-                    String clarification = jsonObject.get("clarification").getAsString();
-                    // Save the clarification state
-                    ChatContextManager.setPendingClarification(playerUUID, userInput, clarification, botSource.getTextName());
-                    // Relay to player in-game
-                    sendMessageToPlayer(clarification);
-                } else {
-                    throw new IllegalStateException("Response must have either functionName or pipeline.");
+                try {
+                    String cleanedResponse = cleanJsonString(response);
+                    logger.info("Cleaned JSON Response: {}", cleanedResponse);
+                    JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
+                    reader.setStrictness(Strictness.LENIENT);
+                    JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
+                    if (jsonObject.has("pipeline")) {
+                        AutoFaceEntity.setBotExecutingTask(true);
+                        JsonArray pipeline = jsonObject.getAsJsonArray("pipeline");
+                        runPipelineLoop(pipeline);
+                    } else if (jsonObject.has("functionName")) {
+                        AutoFaceEntity.setBotExecutingTask(true);
+                        String fnName = jsonObject.get("functionName").getAsString();
+                        JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
+                        Map<String, String> paramMap = resolveParameterMap(paramsArray);
+                        logger.info("Executing: {} with {}", fnName, paramMap);
+                        callFunction(fnName, paramMap, sharedState).join();
+                    } else if (jsonObject.has("clarification")) {
+                        System.out.println("Detected clarification");
+                        String clarification = jsonObject.get("clarification").getAsString();
+                        // Save the clarification state
+                        ChatContextManager.setPendingClarification(playerUUID, userInput, clarification, botSource.getTextName());
+                        // Relay to player in-game
+                        sendMessageToPlayer(clarification);
+                    } else {
+                        throw new IllegalStateException("Response must have either functionName or pipeline.");
+                    }
+                    // getFunctionResultAndSave(userInput, executionDateTime);
+                } catch (Exception e) {
+                    logger.error("❌ Uncaught error in function-caller pipeline execution: {}", e.getMessage(), e);
                 }
-                // getFunctionResultAndSave(userInput, executionDateTime);
             });
         } catch (JsonSyntaxException | NullPointerException | IllegalStateException e) {
             logger.error("Error processing JSON response: {}", e.getMessage(), e);
@@ -952,32 +956,36 @@ public class FunctionCallerV2 {
         String executionDateTime = getCurrentDateandTime();
         try {
             executor.submit(() -> {
-                String cleanedResponse = cleanJsonString(response);
-                logger.info("Cleaned JSON Response: {}", cleanedResponse);
-                JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
-                reader.setStrictness(Strictness.LENIENT);
-                JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
-                if (jsonObject.has("pipeline")) {
-                    AutoFaceEntity.setBotExecutingTask(true);
-                    JsonArray pipeline = jsonObject.getAsJsonArray("pipeline");
-                    runPipelineLoop(pipeline, client);
-                } else if (jsonObject.has("functionName")) {
-                    AutoFaceEntity.setBotExecutingTask(true);
-                    String fnName = jsonObject.get("functionName").getAsString();
-                    JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
-                    Map<String, String> paramMap = resolveParameterMap(paramsArray);
-                    logger.info("Executing: {} with {}", fnName, paramMap);
-                    callFunction(fnName, paramMap, sharedState).join();
-                } else if (jsonObject.has("clarification")) {
-                    String clarification = jsonObject.get("clarification").getAsString();
-                    // Save the clarification state
-                    ChatContextManager.setPendingClarification(playerUUID, userInput, clarification, botSource.getTextName());
-                    // Relay to player in-game
-                    sendMessageToPlayer(clarification);
-                } else {
-                    throw new IllegalStateException("Response must have either functionName or pipeline.");
+                try {
+                    String cleanedResponse = cleanJsonString(response);
+                    logger.info("Cleaned JSON Response: {}", cleanedResponse);
+                    JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
+                    reader.setStrictness(Strictness.LENIENT);
+                    JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
+                    if (jsonObject.has("pipeline")) {
+                        AutoFaceEntity.setBotExecutingTask(true);
+                        JsonArray pipeline = jsonObject.getAsJsonArray("pipeline");
+                        runPipelineLoop(pipeline, client);
+                    } else if (jsonObject.has("functionName")) {
+                        AutoFaceEntity.setBotExecutingTask(true);
+                        String fnName = jsonObject.get("functionName").getAsString();
+                        JsonArray paramsArray = jsonObject.get("parameters").getAsJsonArray();
+                        Map<String, String> paramMap = resolveParameterMap(paramsArray);
+                        logger.info("Executing: {} with {}", fnName, paramMap);
+                        callFunction(fnName, paramMap, sharedState).join();
+                    } else if (jsonObject.has("clarification")) {
+                        String clarification = jsonObject.get("clarification").getAsString();
+                        // Save the clarification state
+                        ChatContextManager.setPendingClarification(playerUUID, userInput, clarification, botSource.getTextName());
+                        // Relay to player in-game
+                        sendMessageToPlayer(clarification);
+                    } else {
+                        throw new IllegalStateException("Response must have either functionName or pipeline.");
+                    }
+                    // getFunctionResultAndSave(userInput, executionDateTime);
+                } catch (Exception e) {
+                    logger.error("❌ Uncaught error in function-caller pipeline execution: {}", e.getMessage(), e);
                 }
-                // getFunctionResultAndSave(userInput, executionDateTime);
             });
         } catch (JsonSyntaxException | NullPointerException | IllegalStateException e) {
             logger.error("Error processing JSON response: {}", e.getMessage(), e);
