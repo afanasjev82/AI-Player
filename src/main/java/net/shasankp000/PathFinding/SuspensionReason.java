@@ -7,5 +7,6 @@ public enum SuspensionReason {
     TRADE,
     THREAT,
     COMBAT,
+    SHELTER,
     MANUAL_OVERRIDE
 }

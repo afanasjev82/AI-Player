@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.shasankp000.AIPlayer;
@@ -18,7 +19,13 @@ import net.shasankp000.GameAI.companion.CompanionController;
 import net.shasankp000.GameAI.planner.GoalMapper;
 import net.shasankp000.GameAI.planner.HybridPlanner;
 import net.shasankp000.GameAI.planner.SkillExperienceStore;
+import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationService;
 import net.shasankp000.PathFinding.PathTracer;
+import net.shasankp000.PathFinding.SuspensionReason;
+import net.shasankp000.PlayerUtils.CombatTool;
+import net.shasankp000.PlayerUtils.RangedWeaponUtils;
+import net.shasankp000.PlayerUtils.WeaponUtils;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 import net.shasankp000.ServiceLLMClients.LLMServiceHandler;
 import org.slf4j.Logger;
@@ -181,6 +188,23 @@ public class AutonomousGoalEngine {
     static final double HOME_RETURN_IDLE_DISTANCE = 24.0;
     /** Within this distance of home the bot is "at home" for wander suppression. */
     static final double HOME_AT_DISTANCE = 12.0;
+
+    // ── Shelter retreat (reactive, threat-driven) ─────────────────────────────
+    /**
+     * A close hostile the bot cannot fight (a flying mob with no ranged weapon,
+     * or a mob while fully unarmed) sends it to shelter. Unlike the night home
+     * return — which is a soft "wander home" — this is a hard retreat: it
+     * navigates with a {@link SuspensionReason#SHELTER} override, which proceeds
+     * even through a {@link SuspensionReason#THREAT} suspension, because the
+     * whole point is to move while a hostile is within range.
+     */
+    private volatile long lastShelterRetreatAt = 0L;
+    /** A hostile closer than this (blocks) triggers the retreat. */
+    static final double SHELTER_THREAT_RANGE = 16.0;
+    /** Horizontal distance from home at which the bot is "inside" the shelter. */
+    static final double SHELTER_ARRIVAL_DISTANCE = 4.0;
+    /** Re-issue gap while a threat persists (the navigation is idempotent). */
+    private static final long SHELTER_RETREAT_COOLDOWN_MS = 5_000L;
 
     /** Single-thread executor that drives the goal execution loop. */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
@@ -790,6 +814,69 @@ public class AutonomousGoalEngine {
         injectGoalWithPriority(goal, priority);
         LOGGER.info("[autonomous] Bot '{}' is {} blocks from home — returning ({})",
                 botName, String.format("%.1f", horizontal), night ? "night" : "idle");
+    }
+
+    /**
+     * Called on the scheduler's drift cadence. When a hostile the bot cannot
+     * fight is within {@link #SHELTER_THREAT_RANGE}, navigate to the home
+     * shelter with a {@link SuspensionReason#SHELTER} override — which keeps
+     * moving through the {@link SuspensionReason#THREAT} suspension the autoface
+     * loop raises for exactly this hostile. Idempotent: a no-op while already
+     * shelter-navigating, already inside, or with no anchor to retreat to.
+     */
+    public void threatShelterTick() {
+        if (homePosition == null || homeDimension == null) return;
+        if (playerControlled.get()) return;
+        if (sleepController.isBotSleeping()) return;
+
+        ServerPlayer bot = resolveBot();
+        if (bot == null) return;
+        if (!bot.level().dimension().equals(homeDimension)) return;
+        // Companion STAY/FOLLOW owns navigation — do not fight it.
+        if (CompanionController.getInstance().getStance(botName) != BotStance.WANDER) return;
+
+        // Already retreating, or already inside the shelter — nothing to do.
+        if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.SHELTER)) return;
+        double horizontal = Math.hypot(
+                bot.getX() - (homePosition.getX() + 0.5),
+                bot.getZ() - (homePosition.getZ() + 0.5));
+        if (horizontal <= SHELTER_ARRIVAL_DISTANCE) return;
+
+        Entity threat = unfightableThreat(bot);
+        if (threat == null) return;
+
+        long now = System.currentTimeMillis();
+        if (now - lastShelterRetreatAt < SHELTER_RETREAT_COOLDOWN_MS) return;
+        lastShelterRetreatAt = now;
+
+        NavigationService.navigateOverride(
+                bot, homePosition.immutable(), NavigationOptions.of(true), SuspensionReason.SHELTER);
+        LOGGER.info("[autonomous] Bot '{}' retreating to shelter from unfightable {} ({}m)",
+                botName, threat.getName().getString(),
+                String.format("%.1f", Math.sqrt(threat.distanceToSqr(bot))));
+    }
+
+    /**
+     * The closest hostile within {@link #SHELTER_THREAT_RANGE} that the bot
+     * cannot fight, or {@code null} if the closest threat is fightable (or there
+     * is none). Weapon reachability is assessed live: a flying mob needs a ranged
+     * weapon, and any threat needs at least one weapon.
+     */
+    private Entity unfightableThreat(ServerPlayer bot) {
+        List<Entity> hostiles = AutoFaceEntity.hostileEntities;
+        if (hostiles == null || hostiles.isEmpty()) return null;
+
+        Entity closest = hostiles.stream()
+                .filter(e -> e != null && e.isAlive())
+                .min(Comparator.comparingDouble(e -> e.distanceToSqr(bot)))
+                .orElse(null);
+        if (closest == null) return null;
+        if (Math.sqrt(closest.distanceToSqr(bot)) > SHELTER_THREAT_RANGE) return null;
+
+        boolean flying = CombatTool.isFlyingHostile(closest);
+        boolean ranged = RangedWeaponUtils.canShoot(bot);
+        boolean melee = WeaponUtils.findBestMeleeWeapon(bot) != -1;
+        return ShelterDecision.shouldTakeShelter(flying, melee, ranged) ? closest : null;
     }
 
     private static boolean isNight(ServerPlayer bot) {

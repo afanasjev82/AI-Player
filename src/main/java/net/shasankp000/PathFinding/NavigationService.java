@@ -666,7 +666,8 @@ public final class NavigationService {
 
     static boolean overrideAllows(SuspensionReason owner, SuspensionReason activeReason) {
         return activeReason == owner
-                || owner == SuspensionReason.COMBAT && activeReason == SuspensionReason.THREAT;
+                || owner == SuspensionReason.COMBAT && activeReason == SuspensionReason.THREAT
+                || owner == SuspensionReason.SHELTER && activeReason == SuspensionReason.THREAT;
     }
 
     private static BlockPos activeGoal(NavigationSession session) {

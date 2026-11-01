@@ -96,6 +96,7 @@ public class AutonomousScheduler {
             companion.followTick(botName);
             companion.stayDriftCheck(botName);
             engine.homeReturnTick();
+            engine.threatShelterTick();
         } catch (Exception e) {
             LOGGER.error("[autonomous-scheduler] Drift-check task error for '{}': {}", botName, e.getMessage(), e);
         }

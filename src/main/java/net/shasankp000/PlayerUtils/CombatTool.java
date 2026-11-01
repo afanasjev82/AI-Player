@@ -28,6 +28,23 @@ import java.util.concurrent.TimeUnit;
  * matches what the rest of the mod already targets.
  */
 public final class CombatTool {
+
+    /**
+     * Whether the entity flies, and so cannot be reliably reached by a melee
+     * swing — only a ranged weapon can answer it. A Phantom is the common case:
+     * it dives and climbs out of reach, so a sword whiffs more often than not.
+     *
+     * <p>Deliberately narrow (mobs that actually fly under their own power and
+     * attack): the hostile list is filtered to {@link Monster}/{@link Slime},
+     * so this only needs to name the flying members of that set.
+     */
+    public static boolean isFlyingHostile(Entity entity) {
+        return entity instanceof net.minecraft.world.entity.monster.Phantom
+                || entity instanceof net.minecraft.world.entity.monster.Vex
+                || entity instanceof net.minecraft.world.entity.monster.Ghast
+                || entity instanceof net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger("combat-tool");
 
     private static final double SEARCH_RADIUS = 8.0;

@@ -775,7 +775,12 @@ public class BotEventHandler {
             // the approach navigation and makes the bot flee mid-engagement.
             // Once the approach reaches (or fails), this guard lifts and the
             // policy may act again.
-            if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)) {
+            //
+            // SHELTER is the same rule for a retreat: while the bot is walking
+            // to its shelter from an unfightable threat, the policy must not
+            // flip back to ATTACK/EVADE and cancel the retreat mid-walk.
+            if (NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.COMBAT)
+                    || NavigationService.isNavigatingFor(bot.getUUID(), SuspensionReason.SHELTER)) {
                 return;
             }
 
